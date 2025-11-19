@@ -161,9 +161,14 @@ g4_mbed_binary(
         "stm32g4_async_uart.h",
         "stm32g4_async_uart.cc",
         "stm32g4_flash.h",
-        "fdcan.h",
-        "fdcan.cc",
-        "fdcan_micro_server.h",
+#       "fdcan.h",
+#       "fdcan.cc",
+#       "fdcan_micro_server.h",
+#
+# Use the UART shim instead of FDCAN
+#
+        "uart_micro_server.h",
+        "uart_micro_server.cc",
     ],
     deps = MOTEUS_DEPS,
     linker_script = "stm32g474.ld",

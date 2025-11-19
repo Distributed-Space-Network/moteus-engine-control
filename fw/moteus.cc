@@ -37,8 +37,12 @@
 #include "fw/uuid.h"
 
 #if defined(TARGET_STM32G4)
+#if defined(USE_FDCAN)
 #include "fw/fdcan.h"
 #include "fw/fdcan_micro_server.h"
+#else
+#include "fw/uart_micro_server.h"
+#endif
 #include "fw/stm32g4_async_uart.h"
 #include "fw/stm32g4_flash.h"
 #else
@@ -83,16 +87,23 @@ void SetupClock() {
     }
 
     RCC_PeriphCLKInitTypeDef PeriphClkInit = {};
-
     PeriphClkInit.PeriphClockSelection =
+  #if defined(USE_FDCAN)
         RCC_PERIPHCLK_FDCAN |
+  #else
+        RCC_PERIPHCLK_USART1 |
+  #endif
         RCC_PERIPHCLK_USART2 |
         RCC_PERIPHCLK_USART3 |
         RCC_PERIPHCLK_ADC12 |
         RCC_PERIPHCLK_ADC345 |
         RCC_PERIPHCLK_I2C1
         ;
+  #if defined(USE_FDCAN)
     PeriphClkInit.FdcanClockSelection = RCC_FDCANCLKSOURCE_PCLK1;
+  #else
+    PeriphClkInit.Usart1ClockSelection = RCC_USART1CLKSOURCE_PCLK1;
+  #endif
     PeriphClkInit.Usart2ClockSelection = RCC_USART2CLKSOURCE_PCLK1;
     PeriphClkInit.Usart3ClockSelection = RCC_USART3CLKSOURCE_PCLK1;
     PeriphClkInit.Adc12ClockSelection = RCC_ADC12CLKSOURCE_SYSCLK;
@@ -203,7 +214,7 @@ int main(void) {
       return options;
                                  }());
   }
-
+#if defined(USE_FDCAN)
   FDCan fdcan([]() {
       FDCan::Options options;
 
@@ -234,6 +245,24 @@ int main(void) {
         options.max_tunnel_streams = 3;
         return options;
       }());
+#else
+  // Set up a dedicated UART (USART1 on PB6/PB7) for multiplex transport.
+  Stm32G4AsyncUart uart1(&pool, &timer, []() {
+    Stm32G4AsyncUart::Options opts;
+    opts.tx = PB_6;      // USART1 TX pin
+    opts.rx = PB_7;      // USART1 RX pin
+    opts.baud_rate = 1000000; // 1 Mbit/s
+    return opts;
+  }());
+  UartMicroServer uart_micro_server(&uart1);
+  multiplex::MicroServer multiplex_protocol(
+      &pool, &uart_micro_server,
+      []() {
+        multiplex::MicroServer::Options options;
+        options.max_tunnel_streams = 3;
+        return options;
+      }());
+#endif
 
   micro::AsyncStream* serial = multiplex_protocol.MakeTunnel(1);
 
@@ -270,6 +299,7 @@ int main(void) {
   GitInfo git_info;
   telemetry_manager.Register("git", &git_info);
 
+#if defined(USE_FDCAN)
   CanConfig can_config, old_can_config;
 
   // We always want to update our filters at least once.
@@ -326,6 +356,10 @@ int main(void) {
   persistent_config.Register("id", multiplex_protocol.config(), maybe_update_filters);
 
   persistent_config.Register("can", &can_config, maybe_update_filters);
+#else
+  // No CAN configuration—register the multiplex ID without filters
+  persistent_config.Register("id", multiplex_protocol.config(), [](){});
+#endif
 
   persistent_config.Load();
 
@@ -340,7 +374,12 @@ int main(void) {
       rs485->Poll();
     }
 #if defined(TARGET_STM32G4)
+#if defined(USE_FDCAN)
     fdcan_micro_server.Poll();
+#else
+    // Poll the UART-based micro server
+    uart_micro_server.Poll();
+#endif
 #endif
     moteus_controller.Poll();
     multiplex_protocol.Poll();
@@ -359,7 +398,11 @@ int main(void) {
       system_info.PollMillisecond();
       moteus_controller.PollMillisecond();
       board_debug.PollMillisecond();
+#if defined(USE_FDCAN)
       system_info.SetCanResetCount(fdcan_micro_server.can_reset_count());
+#else
+      // No CAN resets in UART mode
+#endif
       timer.AdvanceMsSinceBoot();
 
       old_time += 1000;
