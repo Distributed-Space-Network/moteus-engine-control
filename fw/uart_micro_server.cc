@@ -59,8 +59,10 @@ void UartMicroServer::HandleReadHeader(const mjlib::micro::error_code& ec,
   current_read_header_->flags       = read_header_buf_[3];
   // Limit payload to available buffer.
   size_t to_read = current_read_header_->size;
-  if (to_read > current_read_data_.size()) {
-    to_read = current_read_data_.size();
+  // cast current_read_data_.size() to size_t to avoid signed/unsigned comparison
+  size_t max_read = static_cast<size_t>(current_read_data_.size());
+  if (to_read > max_read) {
+    to_read = max_read;
   }
   if (to_read == 0) {
     auto cb = current_read_callback_;
@@ -83,8 +85,9 @@ void UartMicroServer::HandleReadPayload(const mjlib::micro::error_code& ec,
                                         size_t bytes) {
   read_payload_bytes_ += bytes;
   size_t total_expected = current_read_header_->size;
-  if (total_expected > current_read_data_.size()) {
-    total_expected = current_read_data_.size();
+  size_t max_size = static_cast<size_t>(current_read_data_.size());
+  if (total_expected > max_size) {
+    total_expected = max_size;
   }
   if (ec) {
     auto cb = current_read_callback_;
