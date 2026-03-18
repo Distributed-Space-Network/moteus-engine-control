@@ -246,67 +246,176 @@ int main(void) {
         return options;
       }());
 #else
-/*
-  for (int i = 0; i < 5; ++i) {
-    // Turn the LED **off** (write 1 on an active‑low LED).
-    power_led = 1;
-    timer.wait_ms(500);    
-    // Turn it **on** (write 0).
-    power_led = 0;
-    timer.wait_ms(500);
-  }
-  timer.wait_ms(2000);
-*/
   // IMPORTANT: For G431 hardware (moteus r4), PB6 defaults to the drv8323 fault interrupt pin.
   // We MUST blank it to NC so that drv8323.cc doesn't force PB_6 to an Input overriding our UART TX!
   moteus::g_hw_pins.drv8323_fault = NC;
 
-  // Set up a dedicated UART (USART1 on PB6/PB7) WITHOUT DMA or Interrupt handlers
-  moteus::Stm32Serial uart1([]() {
-    moteus::Stm32Serial::Options opts;
+  // Set up a dedicated UART (USART1 on PB6/PB7) for multiplex transport.
+  Stm32G4AsyncUart uart1(&pool, &timer, []() {
+    Stm32G4AsyncUart::Options opts;
     opts.tx = PB_6;      // USART1 TX pin
     opts.rx = PB_7;      // USART1 RX pin
+    // Use valid channels on G431 (DMA1 has 6, DMA2 has 2). DMA2_Ch1/2 are strictly available.
+    opts.rx_dma = DMA2_Channel2;
+    opts.tx_dma = DMA2_Channel1;
     opts.baud_rate = 115200; // 1 Mbit/s
     return opts;
   }());
-
-  // NO UartMicroServer or multiplex_protocol installed.
-  // We are strictly testing raw hardware UART capabilities.
+  UartMicroServer uart_micro_server(&uart1);
+  multiplex::MicroServer multiplex_protocol(
+      &pool, &uart_micro_server,
+      []() {
+        multiplex::MicroServer::Options options;
+        options.max_tunnel_streams = 3;
+        return options;
+      }());
 #endif
 
-  // Bypassed normal object initialization
-  // We go straight to dummy testing.
+  micro::AsyncStream* serial = multiplex_protocol.MakeTunnel(1);
 
-  // --- BARE METAL TEST MODE ---
-  // We bypass moteus_controller, multiplex, and everything else to prove the UART hardware works.
-  
-  uint32_t last_print = timer.read_us() / 1000;
-  bool led_state = false;
+  micro::AsyncExclusive<micro::AsyncWriteStream> write_stream(serial);
+  micro::CommandManager command_manager(&pool, serial, &write_stream);
+  char micro_output_buffer[2048] = {};
+  micro::TelemetryManager telemetry_manager(
+      &pool, &command_manager, &write_stream, micro_output_buffer);
+  Stm32Flash flash_interface;
+  micro::PersistentConfig persistent_config(
+      pool, command_manager, flash_interface, micro_output_buffer);
+
+  SystemInfo system_info(pool, telemetry_manager);
+  FirmwareInfo firmware_info(pool, telemetry_manager,
+                             kMoteusFirmwareVersion, MOTEUS_MODEL_NUMBER);
+  Uuid uuid(persistent_config);
+  ClockManager clock(&timer, persistent_config, command_manager);
+
+  MoteusController moteus_controller(
+      &pool, &persistent_config,
+      &command_manager,
+      &telemetry_manager,
+      &multiplex_protocol,
+      &clock,
+      &system_info,
+      &timer,
+      &firmware_info,
+      &uuid);
+
+  BoardDebug board_debug(
+      &pool, &command_manager, &telemetry_manager, &multiplex_protocol,
+      moteus_controller.bldc_servo());
+
+  GitInfo git_info;
+  telemetry_manager.Register("git", &git_info);
+
+#if defined(USE_FDCAN)
+  CanConfig can_config, old_can_config;
+
+  // We always want to update our filters at least once.
+  uint8_t old_multiplex_id = 255;
+
+  const auto maybe_update_filters =
+      [&can_config, &fdcan, &fdcan_micro_server, &old_can_config,
+       &old_multiplex_id, &multiplex_protocol]() {
+        // We only update our config if it has actually changed.
+        // Re-initializing the CAN-FD controller can cause packets to
+        // be lost, so don't do it unless actually necessary.
+        if (can_config == old_can_config &&
+            multiplex_protocol.config()->id == old_multiplex_id) {
+          return;
+        }
+        old_can_config = can_config;
+        old_multiplex_id = multiplex_protocol.config()->id;
+
+        FDCan::Filter filters[4] = {};
+        filters[0].id1 = (can_config.prefix << 16) | old_multiplex_id;
+        filters[0].id2 = 0x1fff00ffu;
+        filters[0].mode = FDCan::FilterMode::kMask;
+        filters[0].action = FDCan::FilterAction::kAccept;
+        filters[0].type = FDCan::FilterType::kExtended;
+
+        filters[1].id1 = (can_config.prefix << 16) | 0x7f;
+        filters[1].id2 = 0x1fff00ffu;
+        filters[1].mode = FDCan::FilterMode::kMask;
+        filters[1].action = FDCan::FilterAction::kAccept;
+        filters[1].type = FDCan::FilterType::kExtended;
+
+        filters[2].id1 = (can_config.prefix << 16) | old_multiplex_id;
+        filters[2].id2 = 0x1fff00ffu;
+        filters[2].mode = FDCan::FilterMode::kMask;
+        filters[2].action = FDCan::FilterAction::kAccept;
+        filters[2].type = FDCan::FilterType::kStandard;
+
+        filters[3].id1 = (can_config.prefix << 16) | 0x7f;
+        filters[3].id2 = 0x1fff00ffu;
+        filters[3].mode = FDCan::FilterMode::kMask;
+        filters[3].action = FDCan::FilterAction::kAccept;
+        filters[3].type = FDCan::FilterType::kStandard;
+
+        FDCan::FilterConfig filter_config;
+        filter_config.begin = std::begin(filters);
+        filter_config.end = std::end(filters);
+        filter_config.global_std_action = FDCan::FilterAction::kReject;
+        filter_config.global_ext_action = FDCan::FilterAction::kReject;
+        fdcan.ConfigureFilters(filter_config);
+
+        fdcan_micro_server.SetPrefix(can_config.prefix);
+      };
+
+  persistent_config.Register("id", multiplex_protocol.config(), maybe_update_filters);
+
+  persistent_config.Register("can", &can_config, maybe_update_filters);
+#else
+  // No CAN configuration—register the multiplex ID without filters
+  persistent_config.Register("id", multiplex_protocol.config(), [](){});
+#endif
+
+  persistent_config.Load();
+
+  moteus_controller.Start();
+  command_manager.AsyncStart();
+  multiplex_protocol.Start(moteus_controller.multiplex_server());
+
+  auto old_time = timer.read_us();
 
   for (;;) {
-    const uint32_t now = timer.read_us() / 1000;
-    
-    // 500ms toggle
-    if (now - last_print >= 500) {
-      last_print = now;
-      led_state = !led_state;
-      power_led = led_state ? 0 : 1; // 0 is ON, 1 is OFF
-
-      // If we are turning ON, send the UART message
-      if (led_state) {
-        const char msg[] = "Moteus USART1 Bare Metal Alive\r\n";
-        for (size_t i = 0; i < sizeof(msg) - 1; i++) {
-          // Timeout to prevent infinite lockup if USART clock is dead
-          int timeout = 10000;
-          while ((USART1->ISR & (1 << 7)) == 0 && timeout > 0) {
-            timeout--;
-          }
-          if (timeout > 0) {
-            USART1->TDR = msg[i];
-          }
-        }
-      }
+    if (rs485) {
+      rs485->Poll();
     }
+#if defined(TARGET_STM32G4)
+#if defined(USE_FDCAN)
+    fdcan_micro_server.Poll();
+#else
+    // Poll the UART-based micro server
+    uart_micro_server.Poll();
+#endif
+#endif
+    moteus_controller.Poll();
+    multiplex_protocol.Poll();
+
+    const auto new_time = timer.read_us();
+
+    const auto delta_us = MillisecondTimer::subtract_us(new_time, old_time);
+    if (moteus_controller.bldc_servo()->config().timing_fault &&
+        delta_us >= 4000) {
+      // We missed several entire polling cycles.  Fault if we can.
+      moteus_controller.bldc_servo()->Fault(moteus::errc::kTimingViolation);
+    }
+
+    if (delta_us >= 1000) {
+      telemetry_manager.PollMillisecond();
+      system_info.PollMillisecond();
+      moteus_controller.PollMillisecond();
+      board_debug.PollMillisecond();
+#if defined(USE_FDCAN)
+      system_info.SetCanResetCount(fdcan_micro_server.can_reset_count());
+#else
+      // No CAN resets in UART mode
+#endif
+      timer.AdvanceMsSinceBoot();
+
+      old_time += 1000;
+    }
+
+    SystemInfo::idle_count++;
   }
 
   return 0;
