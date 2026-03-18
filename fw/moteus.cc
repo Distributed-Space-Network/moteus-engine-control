@@ -187,7 +187,7 @@ int main(void) {
 
   if (family_and_version.hw_version < 0) {
     // This firmware is not compatible with this board.
-    mbed_die();
+    // mbed_die(); // BYPASS for custom hardware testing!
   }
 
   // We require cycle counting be enabled for some things.
@@ -392,75 +392,36 @@ int main(void) {
 
   persistent_config.Load();
 
-  moteus_controller.Start();
-  command_manager.AsyncStart();
-  multiplex_protocol.Start(moteus_controller.multiplex_server());
-
-  auto old_time = timer.read_us();
+  // --- BARE METAL TEST MODE ---
+  // We bypass moteus_controller, multiplex, and everything else to prove the UART hardware works.
+  
+  uint32_t last_print = timer.read_us() / 1000;
+  bool led_state = false;
 
   for (;;) {
-    if (rs485) {
-      rs485->Poll();
-    }
-#if defined(TARGET_STM32G4)
-#if defined(USE_FDCAN)
-    fdcan_micro_server.Poll();
-    multiplex_protocol.Poll();
-#else
-    // Commented out multiplex polling to allow plaintext debugging
-    // uart_micro_server.Poll();
-    // multiplex_protocol.Poll();
-    uart1.Poll();
-#endif
-#endif
-    moteus_controller.Poll();
+    const uint32_t now = timer.read_us() / 1000;
+    
+    // 500ms toggle
+    if (now - last_print >= 500) {
+      last_print = now;
+      led_state = !led_state;
+      power_led = led_state ? 0 : 1; // 0 is ON, 1 is OFF
 
-    const auto new_time = timer.read_us();
-
-    const auto delta_us = MillisecondTimer::subtract_us(new_time, old_time);
-    if (moteus_controller.bldc_servo()->config().timing_fault &&
-        delta_us >= 4000) {
-      // We missed several entire polling cycles.  Fault if we can.
-      moteus_controller.bldc_servo()->Fault(moteus::errc::kTimingViolation);
-    }
-
-    if (delta_us >= 1000) {
-      telemetry_manager.PollMillisecond();
-      system_info.PollMillisecond();
-      moteus_controller.PollMillisecond();
-      board_debug.PollMillisecond();
-#if defined(USE_FDCAN)
-      system_info.SetCanResetCount(fdcan_micro_server.can_reset_count());
-#else
-      // No CAN resets in UART mode
-#endif
-      timer.AdvanceMsSinceBoot();
-
-      old_time += 1000;
-#if !defined(USE_FDCAN)
-      // Debug testing: Periodically emit plaintext over USART1 using RAW register writes
-      static uint32_t last_print_ms = 0;
-      const uint32_t current_ms = timer.read_us() / 1000;
-      
-      if (current_ms - last_print_ms > 1000) {
-        last_print_ms = current_ms;
-        
-        // Turn it **on** (write 0).
-        power_led = 0;
-        
-        const char* msg = "Moteus USART1 Alive\r\n";
-        while (*msg) {
-          while ((USART1->ISR & (1 << 7)) == 0) {} // Wait for TXE
-          USART1->TDR = *msg++;
+      // If we are turning ON, send the UART message
+      if (led_state) {
+        const char msg[] = "Moteus USART1 Bare Metal Alive\r\n";
+        for (int i = 0; i < sizeof(msg) - 1; i++) {
+          // Timeout to prevent infinite lockup if USART clock is dead
+          int timeout = 10000;
+          while ((USART1->ISR & (1 << 7)) == 0 && timeout > 0) {
+            timeout--;
+          }
+          if (timeout > 0) {
+            USART1->TDR = msg[i];
+          }
         }
-      } else if (current_ms - last_print_ms > 500) {
-        // Turn it **off** (write 1).
-        power_led = 1;
       }
-#endif
     }
-
-    SystemInfo::idle_count++;
   }
 
   return 0;
