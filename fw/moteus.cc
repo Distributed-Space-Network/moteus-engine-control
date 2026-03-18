@@ -375,48 +375,39 @@ int main(void) {
   command_manager.AsyncStart();
   multiplex_protocol.Start(moteus_controller.multiplex_server());
 
+  // ================================================================
+  // RAW ECHO TEST: bypasses ALL DMA, proves physical RX/TX wiring
+  // Every byte received on PB_7 is echoed back on PB_6 immediately.
+  // LED toggles every ~1 second as a heartbeat.
+  // If this echoes, then DMA channel theft by aux2_port is the root cause.
+  // ================================================================
   auto old_time = timer.read_us();
+  bool led_on = true;
+
+  // Clear any pending UART errors first
+  USART1->ICR = 0xFFFFFFFF;  // blast all flags
 
   for (;;) {
-    if (rs485) {
-      rs485->Poll();
+    // Check for received byte (RXNE flag = bit 5)
+    if (USART1->ISR & USART_ISR_RXNE_RXFNE) {
+      const uint8_t byte = USART1->RDR;
+      // Wait for TX ready (TXE flag = bit 7)
+      while (!(USART1->ISR & USART_ISR_TXE_TXFNE)) {}
+      USART1->TDR = byte;
     }
-#if defined(TARGET_STM32G4)
-#if defined(USE_FDCAN)
-    fdcan_micro_server.Poll();
-#else
-    // Poll the UART-based micro server
-    uart_micro_server.Poll();
-#endif
-#endif
-    moteus_controller.Poll();
-    multiplex_protocol.Poll();
 
+    // Clear any UART errors each iteration so they don't lock us out
+    if (USART1->ISR & (USART_ISR_ORE | USART_ISR_FE | USART_ISR_NE | USART_ISR_PE)) {
+      USART1->ICR = (USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_PECF | USART_ICR_NECF);
+    }
+
+    // LED heartbeat ~1s
     const auto new_time = timer.read_us();
-
-    const auto delta_us = MillisecondTimer::subtract_us(new_time, old_time);
-    if (moteus_controller.bldc_servo()->config().timing_fault &&
-        delta_us >= 4000) {
-      // We missed several entire polling cycles.  Fault if we can.
-      moteus_controller.bldc_servo()->Fault(moteus::errc::kTimingViolation);
+    if (MillisecondTimer::subtract_us(new_time, old_time) >= 1000000) {
+      old_time = new_time;
+      led_on = !led_on;
+      power_led = led_on ? 0 : 1;
     }
-
-    if (delta_us >= 1000) {
-      telemetry_manager.PollMillisecond();
-      system_info.PollMillisecond();
-      moteus_controller.PollMillisecond();
-      board_debug.PollMillisecond();
-#if defined(USE_FDCAN)
-      system_info.SetCanResetCount(fdcan_micro_server.can_reset_count());
-#else
-      // No CAN resets in UART mode
-#endif
-      timer.AdvanceMsSinceBoot();
-
-      old_time += 1000;
-    }
-
-    SystemInfo::idle_count++;
   }
 
   return 0;
