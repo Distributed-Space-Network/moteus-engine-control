@@ -386,6 +386,12 @@ int main(void) {
 
   // Clear any pending UART errors first
   USART1->ICR = 0xFFFFFFFF;  // blast all flags
+  
+  // CRITICAL: The Stm32G4AsyncUart constructor set USART_CR3_DMAR, which makes
+  // RXNE trigger a DMA request instead of being visible in ISR polling.
+  // Since aux2_port_ stole our DMA channel, we must disable DMA mode so
+  // RXNE becomes visible for register-level polling.
+  USART1->CR3 &= ~USART_CR3_DMAR;
 
   for (;;) {
     // Check for received byte (RXNE flag = bit 5)
