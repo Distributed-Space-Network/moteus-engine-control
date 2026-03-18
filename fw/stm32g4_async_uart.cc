@@ -323,22 +323,23 @@ class Stm32G4AsyncUart::Impl {
   void Poll() {
     // See if we had an error reading of some sort.
     const auto sr = GetDmaSr(dma_rx_);
+    const auto uart_isr = uart_.Instance->ISR;
+    
+    // Critically missing from moteus: If an ORE/FE happens, DMA stops requesting until ICR clears the error!
+    if (uart_isr & (USART_ISR_ORE | USART_ISR_FE | USART_ISR_NE | USART_ISR_PE)) {
+      uart_.Instance->ICR = (USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_PECF | USART_ICR_NCF);
+      pending_rx_error_ = [&]() {
+        if (uart_isr & USART_ISR_ORE) { return errc::kUartOverrunError; }
+        if (uart_isr & USART_ISR_FE) { return errc::kUartFramingError; }
+        if (uart_isr & USART_ISR_NE) { return errc::kUartNoiseError; }
+        if (uart_isr & USART_ISR_PE) { return errc::kUartParityError; }
+        return errc::kUartOverrunError;
+      }();
+    }
+
     if (sr & dma_rx_flags_.te) {
       ClearDmaFlag(dma_rx_, dma_rx_flags_.te);
-
-      const auto uart_isr = uart_.Instance->ISR;
-      pending_rx_error_ = [&]() {
-        if (uart_isr & USART_ISR_ORE) {
-          return errc::kUartOverrunError;
-        } else if (uart_isr & USART_ISR_FE) {
-          return errc::kUartFramingError;
-        } else if (uart_isr & USART_ISR_NE) {
-          return errc::kUartNoiseError;
-        } else if (uart_isr & USART_ISR_PE) {
-          return errc::kUartParityError;
-        }
-        return errc::kDmaStreamTransferError;
-      }();
+      pending_rx_error_ = errc::kDmaStreamTransferError;
     }
 
     // Handle writes if they are done.

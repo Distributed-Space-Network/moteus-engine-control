@@ -20,47 +20,44 @@ def main():
         sys.exit(1)
 
     # -------------------------------------------------------------
-    # Moteus Multiplex Command: Read 1 Register starting at 0x00 (Mode)
-    # This is a standard mjlib multiplex command over CAN/UART
-    # 0x04 = Read int8 (1 register)
-    # 0x00 = Register 0x00 (Mode)
+    # Moteus Multiplex Command: make_position(query=True)
     # -------------------------------------------------------------
-    multiplex_payload = bytes([0x04, 0x00])
+    multiplex_payload = bytes.fromhex("01000a0d200000c07f11001f01130d")
 
-    # UartMicroServer Header: [dest(1)] [src(1)] [length(1)] [flags(1)]
-    header = struct.pack('<BBBB', args.dest, args.src, len(multiplex_payload), 0)
-
-    print(f"\n[TX] Sending UartMicroServer Header ({len(header)} bytes): {header.hex().upper()}")
-    print(f"[TX] Sending Multiplex Payload  ({len(multiplex_payload)} bytes): {multiplex_payload.hex().upper()}")
+    potential_destinations = [args.dest, 2, 3, 0x7F, 0xFF]
     
-    # Send Header then Payload
-    ser.write(header)
-    ser.write(multiplex_payload)
-    ser.flush()
-
-    # Read back response header
-    print("\n[INFO] Waiting for 4-byte response header...")
-    resp_header = ser.read(4)
-
-    if not resp_header or len(resp_header) < 4:
-        print(f"[ERROR] Timed out waiting for response! Received {len(resp_header)} bytes: {resp_header.hex().upper()}")
-        print("[HINT] Check RX/TX wires, ensure Moteus is powered, and baud rate matches (115200).")
-        sys.exit(1)
-
-    dest, src, payload_len, flags = struct.unpack('<BBBB', resp_header)
-    print(f"[RX] Received Header -> Dest: {dest}, Src: {src}, Length: {payload_len}, Flags: {flags}")
-
-    if payload_len > 0:
-        print(f"[INFO] Waiting for {payload_len} bytes of payload...")
-        resp_payload = ser.read(payload_len)
-        print(f"[RX] Received Payload ({len(resp_payload)} bytes): {resp_payload.hex().upper()}")
+    for dest in potential_destinations:
+        print(f"\n[INFO] Pinging Destination ID: {dest}...")
+        # UartMicroServer Header: [dest] [src] [length] [flags]
+        header = struct.pack('<BBBB', dest, args.src, len(multiplex_payload), 0)
         
-        if len(resp_payload) < payload_len:
-            print("[WARNING] Did not receive full payload before timeout!")
-    else:
-        print("[RX] Payload length is 0. No data attached.")
+        # Flush input buffer just in case
+        ser.reset_input_buffer()
+        
+        ser.write(header)
+        ser.write(multiplex_payload)
+        ser.flush()
 
-    print("\n[SUCCESS] Custom Moteus USART Shim transport is fully functional!")
+        resp_header = ser.read(4)
+
+        if not resp_header or len(resp_header) < 4:
+            print(f"[WARNING] Timed out waiting for response from ID {dest}.")
+            continue
+
+        rx_dest, src, payload_len, flags = struct.unpack('<BBBB', resp_header)
+        print(f"[RX SUCCESS] Received Header -> Dest: {rx_dest}, Src: {src}, Length: {payload_len}, Flags: {flags}")
+
+        if payload_len > 0:
+            resp_payload = ser.read(payload_len)
+            print(f"[RX] Received Payload ({len(resp_payload)} bytes): {resp_payload.hex().upper()}")
+        else:
+            print("[RX] Payload length is 0.")
+
+        print("\n[SUCCESS] Custom Moteus USART Shim transport is fully functional!")
+        ser.close()
+        return
+
+    print("\n[ERROR] No IDs responded. Please double check that your TTL adapter TX is plugged into the board PB_7 pin stably!")
     ser.close()
 
 if __name__ == '__main__':
