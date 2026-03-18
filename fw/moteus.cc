@@ -438,21 +438,21 @@ int main(void) {
 
       old_time += 1000;
 #if !defined(USE_FDCAN)
-      // Debug testing: Periodically emit plaintext over USART1
+      // Debug testing: Periodically emit plaintext over USART1 using RAW register writes
       static uint32_t last_print_ms = 0;
-      static bool write_outstanding = false;
       const uint32_t current_ms = timer.read_us() / 1000;
       
-      if ((current_ms - last_print_ms > 1000) && !write_outstanding) {
+      if (current_ms - last_print_ms > 1000) {
         last_print_ms = current_ms;
-        write_outstanding = true;
         
         // Turn it **on** (write 0).
         power_led = 0;
         
-        uart1.AsyncWriteSome("Moteus USART1 Alive\r\n", [](mjlib::micro::error_code, size_t) {
-          write_outstanding = false;
-        });
+        const char* msg = "Moteus USART1 Alive\r\n";
+        while (*msg) {
+          while ((USART1->ISR & (1 << 7)) == 0) {} // Wait for TXE
+          USART1->TDR = *msg++;
+        }
       } else if (current_ms - last_print_ms > 500) {
         // Turn it **off** (write 1).
         power_led = 1;
