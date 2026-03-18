@@ -262,7 +262,10 @@ int main(void) {
     Stm32G4AsyncUart::Options opts;
     opts.tx = PB_6;      // USART1 TX pin
     opts.rx = PB_7;      // USART1 RX pin
-    opts.baud_rate = 115200; //1000000; // 1 Mbit/s
+    // Use alternate DMA channels, as DMA1_Ch1/2 are used by the default rs485 UART
+    opts.rx_dma = DMA2_Channel4;
+    opts.tx_dma = DMA2_Channel3;
+    opts.baud_rate = 115200; //1000000; // 1 Mbit/s
     return opts;
   }());
   UartMicroServer uart_micro_server(&uart1);

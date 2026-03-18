@@ -19,3 +19,4 @@ site/
 
 # VS Code
 .vscode/
+tmp/
