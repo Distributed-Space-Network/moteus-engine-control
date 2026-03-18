@@ -246,9 +246,10 @@ int main(void) {
         return options;
       }());
 #else
-  // IMPORTANT: For G431 hardware (moteus r4), PB6 defaults to the drv8323 fault interrupt pin.
-  // We MUST blank it to NC so that drv8323.cc doesn't force PB_6 to an Input overriding our UART TX!
+  // IMPORTANT: For G431 hardware (moteus r4), PB6 and PB7 default to drv8323 pins.
+  // We MUST blank them to NC so that drv8323.cc doesn't force them to Input/Output overriding our UART!
   moteus::g_hw_pins.drv8323_fault = NC;
+  moteus::g_hw_pins.drv8323_hiz = NC;
 
   // Set up a dedicated UART (USART1 on PB6/PB7) for multiplex transport.
   Stm32G4AsyncUart uart1(&pool, &timer, []() {
