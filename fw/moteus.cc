@@ -261,15 +261,20 @@ int main(void) {
   // We MUST blank it to NC so that drv8323.cc doesn't force PB_6 to an Input overriding our UART TX!
   moteus::g_hw_pins.drv8323_fault = NC;
 
-  // Set up a dedicated UART (USART1 on PB6/PB7) for multiplex transport.
-  Stm32G4AsyncUart uart1(&pool, &timer, []() {
-    Stm32G4AsyncUart::Options opts;
+  // Set up a dedicated UART (USART1 on PB6/PB7) WITHOUT DMA or Interrupt handlers
+  moteus::Stm32Serial uart_test([]() {
+    moteus::Stm32Serial::Options opts;
     opts.tx = PB_6;      // USART1 TX pin
     opts.rx = PB_7;      // USART1 RX pin
-    // Use valid channels on G431 (DMA1 has 6, DMA2 has 2). DMA2_Ch1/2 are strictly available.
-    opts.rx_dma = DMA2_Channel2;
-    opts.tx_dma = DMA2_Channel1;
-    opts.baud_rate = 115200; //1000000; // 1 Mbit/s
+    opts.baud_rate = 115200; // 1 Mbit/s
+    return opts;
+  }());
+
+  // Dummy AsyncUart to satisfy compiler for UartMicroServer
+  Stm32G4AsyncUart uart1(&pool, &timer, []() {
+    Stm32G4AsyncUart::Options opts;
+    opts.tx = NC;
+    opts.rx = NC;
     return opts;
   }());
   UartMicroServer uart_micro_server(&uart1);
