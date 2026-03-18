@@ -410,7 +410,7 @@ int main(void) {
       // If we are turning ON, send the UART message
       if (led_state) {
         const char msg[] = "Moteus USART1 Bare Metal Alive\r\n";
-        for (int i = 0; i < sizeof(msg) - 1; i++) {
+        for (size_t i = 0; i < sizeof(msg) - 1; i++) {
           // Timeout to prevent infinite lockup if USART clock is dead
           int timeout = 10000;
           while ((USART1->ISR & (1 << 7)) == 0 && timeout > 0) {
