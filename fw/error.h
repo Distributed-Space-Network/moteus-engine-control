@@ -33,6 +33,9 @@ enum class errc {
   kUartBufferOverrunError = 6,
   kUartParityError = 7,
 
+  kUartTransmitError = 8,
+  kCanTransmitError = 9,
+
   kCalibrationFault = 32,
   kMotorDriverFault = 33,
   kOverVoltage = 34,
@@ -50,6 +53,9 @@ enum class errc {
   kTimingViolation = 46,
   kBemfFeedforwardNoAccelLimit = 47,
   kInvalidLimits = 48,
+
+  kSystemStateFault = 49,
+  kHardwareInitFault = 50,
 
   // The following are not hard faults, but instead codes that are
   // presented while in a control mode if some factor is limiting the

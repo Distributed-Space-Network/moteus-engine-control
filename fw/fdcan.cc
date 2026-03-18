@@ -344,7 +344,8 @@ void FDCan::Send(uint32_t dest_id,
           &hfdcan1_, &tx_header,
           const_cast<uint8_t*>(
               reinterpret_cast<const uint8_t*>(data.data()))) != HAL_OK) {
-    mbed_die();
+    // Drop the frame instead of dying
+    return;
   }
   last_tx_request_ = HAL_FDCAN_GetLatestTxFifoQRequestBuffer(&hfdcan1_);
 }
@@ -391,7 +392,6 @@ int FDCan::ParseDlc(uint32_t dlc_code) {
   if (dlc_code == FDCAN_DLC_BYTES_32) { return 32; }
   if (dlc_code == FDCAN_DLC_BYTES_48) { return 48; }
   if (dlc_code == FDCAN_DLC_BYTES_64) { return 64; }
-  mbed_die();
   return 0;
 }
 

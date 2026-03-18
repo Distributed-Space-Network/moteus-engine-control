@@ -278,7 +278,11 @@ class Stm32G4AsyncUart::Impl {
             &uart_,
             const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(data.data())),
             data.size()) != HAL_OK) {
-      mbed_die();
+      if (current_write_callback_) {
+        auto copy = current_write_callback_;
+        current_write_callback_ = {};
+        copy(errc::kUartTransmitError, 0);
+      }
     }
   }
 

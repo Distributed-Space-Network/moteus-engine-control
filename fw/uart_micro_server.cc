@@ -141,6 +141,20 @@ void UartMicroServer::AsyncWrite(const Header& header,
       });
 }
 
+void UartMicroServer::AsyncWrite() {
+  write_header_buf_[0] = static_cast<uint8_t>('A');
+  write_header_buf_[1] = static_cast<uint8_t>('B');
+  write_header_buf_[2] = static_cast<uint8_t>('C');
+  write_header_buf_[3] = static_cast<uint8_t>('D');
+  std::string_view header_view(
+      reinterpret_cast<const char*>(write_header_buf_.data()),
+      write_header_buf_.size());
+  uart_->AsyncWriteSome(header_view,
+      [this](const mjlib::micro::error_code& ec, size_t bytes) {
+        this->HandleWriteHeader(ec, bytes);
+      });
+}
+
 void UartMicroServer::HandleWriteHeader(const mjlib::micro::error_code& ec,
                                         size_t /*bytes*/) {
   if (ec) {

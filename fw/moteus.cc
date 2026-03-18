@@ -246,15 +246,37 @@ int main(void) {
         return options;
       }());
 #else
+/*
+  for (int i = 0; i < 5; ++i) {
+    // Turn the LED **off** (write 1 on an active‑low LED).
+    power_led = 1;
+    timer.wait_ms(500);    
+    // Turn it **on** (write 0).
+    power_led = 0;
+    timer.wait_ms(500);
+  }
+  timer.wait_ms(2000);
+*/
   // Set up a dedicated UART (USART1 on PB6/PB7) for multiplex transport.
   Stm32G4AsyncUart uart1(&pool, &timer, []() {
     Stm32G4AsyncUart::Options opts;
     opts.tx = PB_6;      // USART1 TX pin
     opts.rx = PB_7;      // USART1 RX pin
-    opts.baud_rate = 1000000; // 1 Mbit/s
+    opts.baud_rate = 115200; //1000000; // 1 Mbit/s
     return opts;
   }());
   UartMicroServer uart_micro_server(&uart1);
+  /*
+  for (;;) {
+    // Turn the LED **off** (write 1 on an active‑low LED).
+    power_led = 1;
+    timer.wait_ms(500);
+    uart_micro_server.AsyncWrite();
+    // Turn it **on** (write 0).
+    power_led = 0;
+    timer.wait_ms(2000);
+  }
+  */
   multiplex::MicroServer multiplex_protocol(
       &pool, &uart_micro_server,
       []() {
@@ -376,13 +398,15 @@ int main(void) {
 #if defined(TARGET_STM32G4)
 #if defined(USE_FDCAN)
     fdcan_micro_server.Poll();
+    multiplex_protocol.Poll();
 #else
-    // Poll the UART-based micro server
-    uart_micro_server.Poll();
+    // Commented out multiplex polling to allow plaintext debugging
+    // uart_micro_server.Poll();
+    // multiplex_protocol.Poll();
+    uart1.Poll();
 #endif
 #endif
     moteus_controller.Poll();
-    multiplex_protocol.Poll();
 
     const auto new_time = timer.read_us();
 
@@ -406,6 +430,27 @@ int main(void) {
       timer.AdvanceMsSinceBoot();
 
       old_time += 1000;
+#if !defined(USE_FDCAN)
+      // Debug testing: Periodically emit plaintext over USART1
+      static uint32_t last_print_ms = 0;
+      static bool write_outstanding = false;
+      const uint32_t current_ms = timer.read_us() / 1000;
+      
+      if ((current_ms - last_print_ms > 1000) && !write_outstanding) {
+        last_print_ms = current_ms;
+        write_outstanding = true;
+        
+        // Turn it **on** (write 0).
+        power_led = 0;
+        
+        uart1.AsyncWriteSome("Moteus USART1 Alive\r\n", [](mjlib::micro::error_code, size_t) {
+          write_outstanding = false;
+        });
+      } else if (current_ms - last_print_ms > 500) {
+        // Turn it **off** (write 1).
+        power_led = 1;
+      }
+#endif
     }
 
     SystemInfo::idle_count++;

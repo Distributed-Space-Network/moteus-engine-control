@@ -29,6 +29,7 @@ class UartMicroServer : public mjlib::multiplex::MicroDatagramServer {
                   const std::string_view& data,
                   const Header& query_header,
                   const mjlib::micro::SizeCallback& callback) override;
+  void AsyncWrite();
 
   Properties properties() const override;
   void Poll();
