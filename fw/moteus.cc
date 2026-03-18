@@ -389,10 +389,10 @@ int main(void) {
 
   for (;;) {
     // Check for received byte (RXNE flag = bit 5)
-    if (USART1->ISR & USART_ISR_RXNE_RXFNE) {
+    if (USART1->ISR & (1 << 5)) { // RXNE
       const uint8_t byte = USART1->RDR;
       // Wait for TX ready (TXE flag = bit 7)
-      while (!(USART1->ISR & USART_ISR_TXE_TXFNE)) {}
+      while (!(USART1->ISR & (1 << 7))) {} // TXE
       USART1->TDR = byte;
     }
 
