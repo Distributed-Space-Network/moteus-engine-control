@@ -393,6 +393,27 @@ int main(void) {
   // RXNE becomes visible for register-level polling.
   USART1->CR3 &= ~USART_CR3_DMAR;
 
+  // CRITICAL: aux_port and drv8323 initialization in MoteusController may have
+  // reconfigured PB_6 and PB_7 away from USART1 (AF7). Force them back now.
+  // PB_6 = USART1_TX, PB_7 = USART1_RX, both need AF7.
+  {
+    // Enable GPIOB clock (should already be enabled, but be safe)
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+    
+    // PB_6: Set to Alternate Function mode (MODER bits [13:12] = 10)
+    GPIOB->MODER = (GPIOB->MODER & ~(3u << (6 * 2))) | (2u << (6 * 2));
+    // PB_6: Set AF7 in AFRL (AFR[0] bits [27:24] = 0111)
+    GPIOB->AFR[0] = (GPIOB->AFR[0] & ~(0xFu << (6 * 4))) | (7u << (6 * 4));
+    
+    // PB_7: Set to Alternate Function mode (MODER bits [15:14] = 10)
+    GPIOB->MODER = (GPIOB->MODER & ~(3u << (7 * 2))) | (2u << (7 * 2));
+    // PB_7: Set AF7 in AFRL (AFR[0] bits [31:28] = 0111)
+    GPIOB->AFR[0] = (GPIOB->AFR[0] & ~(0xFu << (7 * 4))) | (7u << (7 * 4));
+    
+    // Re-enable the USART receiver in case it was disabled
+    USART1->CR1 |= USART_CR1_RE | USART_CR1_TE | USART_CR1_UE;
+  }
+
   for (;;) {
     // Check for received byte (RXNE flag = bit 5)
     if (USART1->ISR & (1 << 5)) { // RXNE
