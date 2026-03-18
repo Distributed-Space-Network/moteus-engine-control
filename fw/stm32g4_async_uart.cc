@@ -327,7 +327,7 @@ class Stm32G4AsyncUart::Impl {
     
     // Critically missing from moteus: If an ORE/FE happens, DMA stops requesting until ICR clears the error!
     if (uart_isr & (USART_ISR_ORE | USART_ISR_FE | USART_ISR_NE | USART_ISR_PE)) {
-      uart_.Instance->ICR = (USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_PECF | USART_ICR_NCF);
+      uart_.Instance->ICR = (USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_PECF | USART_ICR_NECF);
       pending_rx_error_ = [&]() {
         if (uart_isr & USART_ISR_ORE) { return errc::kUartOverrunError; }
         if (uart_isr & USART_ISR_FE) { return errc::kUartFramingError; }
