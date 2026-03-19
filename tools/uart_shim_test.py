@@ -79,6 +79,12 @@ WRITE_FLOAT = 0x0C
 READ_INT8   = 0x10
 READ_FLOAT  = 0x1C
 
+# Tunnel subframes
+CLIENT_TO_SERVER = 0x40
+SERVER_TO_CLIENT = 0x41
+CLIENT_POLL_SERVER = 0x42
+TUNNEL_CHANNEL = 1  # Diagnostic console
+
 
 def encode_varuint(value):
     result = bytearray()
@@ -318,6 +324,93 @@ def cmd_raw(ser, dest, hex_str):
         print(f"  (empty payload)")
 
 
+def send_tunnel(ser, dest, text):
+    """Send text through multiplex tunnel 1 (diagnostic console) and read response."""
+    data = (text + '\n').encode('ascii')
+    # Build client-to-server tunnel subframe
+    tunnel_sf = bytearray()
+    tunnel_sf.append(CLIENT_TO_SERVER)
+    tunnel_sf += encode_varuint(TUNNEL_CHANNEL)
+    tunnel_sf += encode_varuint(len(data))
+    tunnel_sf += data
+    # Also add a poll to get the response
+    tunnel_sf.append(CLIENT_POLL_SERVER)
+    tunnel_sf += encode_varuint(TUNNEL_CHANNEL)
+    tunnel_sf += encode_varuint(256)  # max bytes to receive
+
+    resp_hdr, payload = send_command(ser, dest, bytes(tunnel_sf))
+    response_text = ''
+
+    # Parse server-to-client responses from payload
+    if payload:
+        response_text = _extract_tunnel_text(payload)
+
+    # Keep polling for more response data
+    for _ in range(20):
+        poll_sf = bytearray()
+        poll_sf.append(CLIENT_POLL_SERVER)
+        poll_sf += encode_varuint(TUNNEL_CHANNEL)
+        poll_sf += encode_varuint(256)
+        resp_hdr, payload = send_command(ser, dest, bytes(poll_sf))
+        if not payload:
+            break
+        chunk = _extract_tunnel_text(payload)
+        if not chunk:
+            break
+        response_text += chunk
+
+    return response_text
+
+
+def _extract_tunnel_text(payload):
+    """Extract text from server-to-client tunnel subframes in a response payload."""
+    text = ''
+    i = 0
+    while i < len(payload):
+        cmd = payload[i]
+        i += 1
+        if cmd == SERVER_TO_CLIENT:
+            if i >= len(payload): break
+            channel = payload[i]; i += 1
+            if i >= len(payload): break
+            data_len = payload[i]; i += 1
+            if i + data_len > len(payload): break
+            if channel == TUNNEL_CHANNEL:
+                text += payload[i:i+data_len].decode('ascii', errors='replace')
+            i += data_len
+        else:
+            break  # Not a tunnel subframe
+    return text
+
+
+def cmd_conf(ser, dest, conf_args):
+    """Send a conf command through the diagnostic tunnel."""
+    cmd_text = 'conf ' + conf_args
+    response = send_tunnel(ser, dest, cmd_text)
+    if response:
+        print(response.rstrip())
+    else:
+        print("  (no response)")
+
+
+def cmd_tel(ser, dest, tel_args):
+    """Send a tel command through the diagnostic tunnel."""
+    response = send_tunnel(ser, dest, 'tel ' + tel_args)
+    if response:
+        print(response.rstrip())
+    else:
+        print("  (no response)")
+
+
+def cmd_diag(ser, dest, text):
+    """Send arbitrary text through the diagnostic tunnel."""
+    response = send_tunnel(ser, dest, text)
+    if response:
+        print(response.rstrip())
+    else:
+        print("  (no response)")
+
+
 HELP_TEXT = """
 Commands:
   query / q          Read motor status
@@ -328,9 +421,20 @@ Commands:
   voltage D_V Q_V    Voltage DQ mode (volts) — no encoder needed
   vfoc THETA VOLTAGE Voltage FOC mode (rad, volts)
   watch [Hz]         Continuous status (default 2 Hz)
+  conf <args>        Send conf command (get/set/write/default/list/enumerate)
+  tel <args>         Send tel command (list/get/stop)
+  diag <text>        Send arbitrary diagnostic command
   raw <hex>          Send raw multiplex subframe
   help               This help
   quit / exit        Exit
+
+Examples:
+  conf get motor       Show motor config
+  conf set motor.poles 14
+  conf set servo.aux1_encoder.mode 1
+  conf write           Save config to flash
+  conf default         Reset config to defaults
+  tel list             List telemetry channels
 """
 
 
@@ -404,6 +508,21 @@ def main():
                     print("  Usage: raw <hex_bytes>")
                     continue
                 cmd_raw(ser, args.dest, parts[1])
+            elif cmd == 'conf':
+                if len(parts) < 2:
+                    print("  Usage: conf <get|set|write|default|list|enumerate> [args]")
+                    continue
+                cmd_conf(ser, args.dest, ' '.join(parts[1:]))
+            elif cmd == 'tel':
+                if len(parts) < 2:
+                    print("  Usage: tel <list|get|stop> [args]")
+                    continue
+                cmd_tel(ser, args.dest, ' '.join(parts[1:]))
+            elif cmd == 'diag':
+                if len(parts) < 2:
+                    print("  Usage: diag <command text>")
+                    continue
+                cmd_diag(ser, args.dest, ' '.join(parts[1:]))
             else:
                 print(f"  Unknown: '{cmd}'. Type 'help'.")
         except Exception as e:
