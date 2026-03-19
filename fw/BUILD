@@ -167,6 +167,7 @@ g4_mbed_binary(
 #
 # Use the UART shim instead of FDCAN
 #
+        "polling_uart.h",
         "uart_micro_server.h",
         "uart_micro_server.cc",
     ],

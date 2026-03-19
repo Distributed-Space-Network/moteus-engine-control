@@ -4,55 +4,63 @@ import time
 import sys
 
 def main():
-    parser = argparse.ArgumentParser(description="Test Moteus USART1 Echo + Diagnostics")
+    parser = argparse.ArgumentParser(description="Test Moteus USART1 CAN Shim")
     parser.add_argument("--port", "-p", default="COM3", help="Serial port")
     parser.add_argument("--baud", "-b", type=int, default=115200, help="Baud rate")
+    parser.add_argument("--dest", "-d", type=int, default=1, help="Destination ID")
     args = parser.parse_args()
 
     print(f"[INFO] Opening {args.port} at {args.baud} bps...")
     try:
-        ser = serial.Serial(args.port, args.baud, timeout=20.0)
+        ser = serial.Serial(args.port, args.baud, timeout=2.0)
     except Exception as e:
         print(f"[ERROR] Failed to open port: {e}")
         sys.exit(1)
 
-    # Wait for the diagnostic message from boot
-    print("\n[INFO] Waiting for boot diagnostic (reset/power-cycle the board now)...")
-    print("[INFO] Reading for up to 20 seconds...\n")
-    
-    boot_data = ser.read(512)
-    if boot_data:
-        print(f"[BOOT] Received {len(boot_data)} bytes:")
-        try:
-            print(boot_data.decode('ascii', errors='replace'))
-        except:
-            print(boot_data.hex())
-    else:
-        print("[BOOT] No boot data received (might have already booted).")
-    
-    # Flush
+    # Flush any boot noise
+    time.sleep(0.2)
+    ser.reset_input_buffer()
+
+    # Moteus Multiplex: make_position(query=True) payload
+    multiplex_payload = bytes.fromhex("01000a0d200000c07f11001f01130d")
+
+    # Send zero padding to re-align the UartMicroServer's 4-byte parser
+    print("\n[INFO] Sending alignment padding (100 x 0x00)...")
+    ser.write(b'\x00' * 100)
+    ser.flush()
     time.sleep(0.1)
     ser.reset_input_buffer()
 
-    # --- ECHO TEST ---
-    test_bytes = b"Hello Moteus!\r\n"
+    potential_destinations = [args.dest, 2, 3, 0x7F, 0xFF]
     
-    print(f"\n[TX] Sending {len(test_bytes)} bytes: {test_bytes!r}")
-    ser.write(test_bytes)
-    ser.flush()
+    for dest in potential_destinations:
+        source_id = 0x00
+        payload_len = len(multiplex_payload)
+        flags = 0x00
+        header = bytes([dest, source_id, payload_len, flags])
+        
+        print(f"\n[INFO] Pinging Destination ID: {dest}...")
+        print(f"[TX] Header (4 bytes): {header.hex().upper()}")
+        print(f"[TX] Payload ({payload_len} bytes): {multiplex_payload.hex().upper()}")
+        
+        ser.write(header + multiplex_payload)
+        ser.flush()
 
-    echo = ser.read(len(test_bytes))
-    
-    if len(echo) == 0:
-        print(f"[ERROR] No echo received at all! 0 bytes back.")
-        print(f"[HINT] PB_7 (USART1 RX) is not receiving.")
-    elif echo == test_bytes:
-        print(f"[RX] Got perfect echo: {echo!r}")
-        print(f"\n[SUCCESS] Echo works! Physical RX/TX confirmed!")
-    else:
-        print(f"[RX] Got {len(echo)} bytes: {echo!r}")
-        print(f"[RX] Hex: {echo.hex().upper()}")
+        # Wait for 4-byte response header
+        resp_header = ser.read(4)
+        if len(resp_header) == 4:
+            r_dest, r_src, r_len, r_flags = resp_header
+            print(f"[RX] Header: dest={r_dest} src={r_src} len={r_len} flags={r_flags}")
+            if r_len > 0:
+                resp_payload = ser.read(r_len)
+                print(f"[RX] Payload ({len(resp_payload)} bytes): {resp_payload.hex().upper()}")
+            print(f"\n[SUCCESS] Got response from ID {r_src}!")
+            ser.close()
+            return
+        else:
+            print(f"[WARNING] Timed out waiting for response from ID {dest}.")
 
+    print(f"\n[ERROR] No IDs responded.")
     ser.close()
 
 if __name__ == '__main__':

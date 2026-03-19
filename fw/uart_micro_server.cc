@@ -9,7 +9,7 @@ namespace moteus {
 using mjlib::base::string_span;
 using mjlib::micro::SizeCallback;
 
-UartMicroServer::UartMicroServer(Stm32G4AsyncUart* uart)
+UartMicroServer::UartMicroServer(PollingUart* uart)
     : uart_(uart) {}
 
 void UartMicroServer::AsyncRead(Header* header,

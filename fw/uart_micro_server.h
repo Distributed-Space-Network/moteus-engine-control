@@ -7,7 +7,7 @@
 #include "mjlib/multiplex/micro_datagram_server.h"
 #include "mjlib/micro/async_stream.h"
 #include "mjlib/base/string_span.h"
-#include "fw/stm32g4_async_uart.h"
+#include "fw/polling_uart.h"
 
 namespace moteus {
 
@@ -18,7 +18,7 @@ namespace moteus {
 /// Supports payloads up to 64 bytes.
 class UartMicroServer : public mjlib::multiplex::MicroDatagramServer {
  public:
-  explicit UartMicroServer(Stm32G4AsyncUart* uart);
+  explicit UartMicroServer(PollingUart* uart);
   ~UartMicroServer() override = default;
 
   void AsyncRead(Header* header,
@@ -40,7 +40,7 @@ class UartMicroServer : public mjlib::multiplex::MicroDatagramServer {
   void HandleWriteHeader(const mjlib::micro::error_code& ec, size_t bytes);
   void HandleWritePayload(const mjlib::micro::error_code& ec, size_t bytes);
 
-  Stm32G4AsyncUart* const uart_;
+  PollingUart* const uart_;
   mjlib::micro::SizeCallback current_read_callback_;
   Header* current_read_header_ = nullptr;
   mjlib::base::string_span current_read_data_{};

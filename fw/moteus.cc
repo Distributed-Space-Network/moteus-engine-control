@@ -251,77 +251,17 @@ int main(void) {
   moteus::g_hw_pins.drv8323_fault = NC;
   moteus::g_hw_pins.drv8323_hiz = NC;
 
-  // Set up a dedicated UART (USART1 on PB6/PB7) for multiplex transport.
-  Stm32G4AsyncUart uart1(&pool, &timer, []() {
-    Stm32G4AsyncUart::Options opts;
-    opts.tx = PB_6;      // USART1 TX pin
-    opts.rx = PB_7;      // USART1 RX pin
-    opts.rx_dma = DMA2_Channel2;
-    opts.tx_dma = DMA2_Channel1;
+  // DMA-free UART on USART1 (PB6/PB7).
+  // We CANNOT use DMA because aux2_port_ in MoteusController steals
+  // DMA2_Channel1 and DMA2_Channel2, and there are no free DMA channels
+  // on STM32G431. PollingUart uses pure RXNE/TXE register polling instead.
+  moteus::PollingUart uart1([]() {
+    moteus::PollingUart::Options opts;
+    opts.tx = PB_6;
+    opts.rx = PB_7;
     opts.baud_rate = 115200;
     return opts;
   }());
-
-  // ================================================================
-  // ISOLATED ECHO TEST — runs BEFORE any motor controller init
-  // ================================================================
-  // Disable DMA on RX so we can poll RXNE directly
-  USART1->CR3 &= ~USART_CR3_DMAR;
-  USART1->ICR = 0xFFFFFFFF;
-  // Force PB_6=AF7(TX), PB_7=AF7(RX)
-  GPIOB->MODER = (GPIOB->MODER & ~(3u << 12)) | (2u << 12); // PB6 AF
-  GPIOB->MODER = (GPIOB->MODER & ~(3u << 14)) | (2u << 14); // PB7 AF
-  GPIOB->AFR[0] = (GPIOB->AFR[0] & ~(0xFu << 24)) | (7u << 24); // PB6 AF7
-  GPIOB->AFR[0] = (GPIOB->AFR[0] & ~(0xFu << 28)) | (7u << 28); // PB7 AF7
-  USART1->CR1 |= USART_CR1_RE | USART_CR1_TE | USART_CR1_UE;
-  USART1->ICR = 0xFFFFFFFF;
-
-  {
-    auto tx_byte = [](uint8_t b) {
-      while (!(USART1->ISR & (1 << 7))) {}
-      USART1->TDR = b;
-    };
-    auto tx_str = [&](const char* s) {
-      while (*s) { tx_byte(*s++); }
-    };
-    auto tx_hex32 = [&](uint32_t v) {
-      const char hex[] = "0123456789ABCDEF";
-      for (int i = 28; i >= 0; i -= 4) {
-        tx_byte(hex[(v >> i) & 0xF]);
-      }
-    };
-    
-    tx_str("DIAG: CR1=");   tx_hex32(USART1->CR1);
-    tx_str(" CR3=");         tx_hex32(USART1->CR3);
-    tx_str(" ISR=");         tx_hex32(USART1->ISR);
-    tx_str(" BRR=");         tx_hex32(USART1->BRR);
-    tx_str(" MODER=");       tx_hex32(GPIOB->MODER);
-    tx_str(" AFRL=");        tx_hex32(GPIOB->AFR[0]);
-    tx_str("\r\nECHO TEST ACTIVE\r\n");
-
-    auto old_time = timer.read_us();
-    bool led_on = true;
-    for (;;) {
-      if (USART1->ISR & (1 << 5)) { // RXNE
-        const uint8_t byte = USART1->RDR;
-        while (!(USART1->ISR & (1 << 7))) {} // TXE
-        USART1->TDR = byte;
-      }
-      if (USART1->ISR & (USART_ISR_ORE | USART_ISR_FE | USART_ISR_NE | USART_ISR_PE)) {
-        USART1->ICR = (USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_PECF | USART_ICR_NECF);
-      }
-      const auto new_time = timer.read_us();
-      if (MillisecondTimer::subtract_us(new_time, old_time) >= 1000000) {
-        old_time = new_time;
-        led_on = !led_on;
-        power_led = led_on ? 0 : 1;
-      }
-    }
-  }
-  // ================================================================
-  // END ISOLATED ECHO TEST — code below will never execute
-  // ================================================================
-
   UartMicroServer uart_micro_server(&uart1);
   multiplex::MicroServer multiplex_protocol(
       &pool, &uart_micro_server,
@@ -350,19 +290,12 @@ int main(void) {
   ClockManager clock(&timer, persistent_config, command_manager);
 
   MoteusController moteus_controller(
-      &pool, &persistent_config,
-      &command_manager,
-      &telemetry_manager,
-      &multiplex_protocol,
-      &clock,
-      &system_info,
-      &timer,
-      &firmware_info,
-      &uuid);
+      &pool, &persistent_config, &command_manager, &telemetry_manager,
+      &multiplex_protocol, &clock, &system_info, &timer, &firmware_info, &uuid);
 
   BoardDebug board_debug(
-      &pool, &command_manager, &telemetry_manager, &multiplex_protocol,
-      moteus_controller.bldc_servo());
+      &pool, &command_manager, &telemetry_manager,
+      &multiplex_protocol, moteus_controller.bldc_servo());
 
   GitInfo git_info;
   telemetry_manager.Register("git", &git_info);
@@ -370,15 +303,11 @@ int main(void) {
 #if defined(USE_FDCAN)
   CanConfig can_config, old_can_config;
 
-  // We always want to update our filters at least once.
   uint8_t old_multiplex_id = 255;
 
   const auto maybe_update_filters =
       [&can_config, &fdcan, &fdcan_micro_server, &old_can_config,
        &old_multiplex_id, &multiplex_protocol]() {
-        // We only update our config if it has actually changed.
-        // Re-initializing the CAN-FD controller can cause packets to
-        // be lost, so don't do it unless actually necessary.
         if (can_config == old_can_config &&
             multiplex_protocol.config()->id == old_multiplex_id) {
           return;
@@ -422,10 +351,8 @@ int main(void) {
       };
 
   persistent_config.Register("id", multiplex_protocol.config(), maybe_update_filters);
-
   persistent_config.Register("can", &can_config, maybe_update_filters);
 #else
-  // No CAN configuration—register the multiplex ID without filters
   persistent_config.Register("id", multiplex_protocol.config(), [](){});
 #endif
 
@@ -435,94 +362,47 @@ int main(void) {
   command_manager.AsyncStart();
   multiplex_protocol.Start(moteus_controller.multiplex_server());
 
-  // ================================================================
-  // RAW ECHO TEST: bypasses ALL DMA, proves physical RX/TX wiring
-  // Every byte received on PB_7 is echoed back on PB_6 immediately.
-  // LED toggles every ~1 second as a heartbeat.
-  // If this echoes, then DMA channel theft by aux2_port is the root cause.
-  // ================================================================
   auto old_time = timer.read_us();
-  bool led_on = true;
-
-  // Clear any pending UART errors first
-  USART1->ICR = 0xFFFFFFFF;  // blast all flags
-  
-  // CRITICAL: The Stm32G4AsyncUart constructor set USART_CR3_DMAR, which makes
-  // RXNE trigger a DMA request instead of being visible in ISR polling.
-  // Since aux2_port_ stole our DMA channel, we must disable DMA mode so
-  // RXNE becomes visible for register-level polling.
-  USART1->CR3 &= ~USART_CR3_DMAR;
-
-  // CRITICAL: aux_port and drv8323 initialization in MoteusController may have
-  // reconfigured PB_6 and PB_7 away from USART1 (AF7). Force them back now.
-  // PB_6 = USART1_TX, PB_7 = USART1_RX, both need AF7.
-  {
-    // Enable GPIOB clock (should already be enabled, but be safe)
-    __HAL_RCC_GPIOB_CLK_ENABLE();
-    
-    // PB_6: Set to Alternate Function mode (MODER bits [13:12] = 10)
-    GPIOB->MODER = (GPIOB->MODER & ~(3u << (6 * 2))) | (2u << (6 * 2));
-    // PB_6: Set AF7 in AFRL (AFR[0] bits [27:24] = 0111)
-    GPIOB->AFR[0] = (GPIOB->AFR[0] & ~(0xFu << (6 * 4))) | (7u << (6 * 4));
-    
-    // PB_7: Set to Alternate Function mode (MODER bits [15:14] = 10)
-    GPIOB->MODER = (GPIOB->MODER & ~(3u << (7 * 2))) | (2u << (7 * 2));
-    // PB_7: Set AF7 in AFRL (AFR[0] bits [31:28] = 0111)
-    GPIOB->AFR[0] = (GPIOB->AFR[0] & ~(0xFu << (7 * 4))) | (7u << (7 * 4));
-    
-    // Re-enable the USART receiver in case it was disabled
-    USART1->CR1 |= USART_CR1_RE | USART_CR1_TE | USART_CR1_UE;
-  }
-
-  // Clear errors again after reconfiguration
-  USART1->ICR = 0xFFFFFFFF;
-
-  // ---- DIAGNOSTIC: Dump register state over TX ----
-  {
-    auto tx_byte = [](uint8_t b) {
-      while (!(USART1->ISR & (1 << 7))) {}
-      USART1->TDR = b;
-    };
-    auto tx_str = [&](const char* s) {
-      while (*s) { tx_byte(*s++); }
-    };
-    auto tx_hex32 = [&](uint32_t v) {
-      const char hex[] = "0123456789ABCDEF";
-      for (int i = 28; i >= 0; i -= 4) {
-        tx_byte(hex[(v >> i) & 0xF]);
-      }
-    };
-    
-    tx_str("DIAG: CR1=");   tx_hex32(USART1->CR1);
-    tx_str(" CR3=");         tx_hex32(USART1->CR3);
-    tx_str(" ISR=");         tx_hex32(USART1->ISR);
-    tx_str(" BRR=");         tx_hex32(USART1->BRR);
-    tx_str(" MODER=");       tx_hex32(GPIOB->MODER);
-    tx_str(" AFRL=");        tx_hex32(GPIOB->AFR[0]);
-    tx_str("\r\nECHO READY\r\n");
-  }
 
   for (;;) {
-    // Check for received byte (RXNE flag = bit 5)
-    if (USART1->ISR & (1 << 5)) { // RXNE
-      const uint8_t byte = USART1->RDR;
-      // Wait for TX ready (TXE flag = bit 7)
-      while (!(USART1->ISR & (1 << 7))) {} // TXE
-      USART1->TDR = byte;
+    if (rs485) {
+      rs485->Poll();
     }
+#if defined(TARGET_STM32G4)
+#if defined(USE_FDCAN)
+    fdcan_micro_server.Poll();
+#else
+    uart_micro_server.Poll();
+    uart1.Poll();
+#endif
+#endif
+    moteus_controller.Poll();
+    multiplex_protocol.Poll();
 
-    // Clear any UART errors each iteration so they don't lock us out
-    if (USART1->ISR & (USART_ISR_ORE | USART_ISR_FE | USART_ISR_NE | USART_ISR_PE)) {
-      USART1->ICR = (USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_PECF | USART_ICR_NECF);
-    }
-
-    // LED heartbeat ~1s
     const auto new_time = timer.read_us();
-    if (MillisecondTimer::subtract_us(new_time, old_time) >= 1000000) {
-      old_time = new_time;
-      led_on = !led_on;
-      power_led = led_on ? 0 : 1;
+
+    const auto delta_us = MillisecondTimer::subtract_us(new_time, old_time);
+    if (moteus_controller.bldc_servo()->config().timing_fault &&
+        delta_us >= 4000) {
+      moteus_controller.bldc_servo()->Fault(moteus::errc::kTimingViolation);
     }
+
+    if (delta_us >= 1000) {
+      telemetry_manager.PollMillisecond();
+      system_info.PollMillisecond();
+      moteus_controller.PollMillisecond();
+      board_debug.PollMillisecond();
+#if defined(USE_FDCAN)
+      system_info.SetCanResetCount(fdcan_micro_server.can_reset_count());
+#else
+      // No CAN resets in UART mode
+#endif
+      timer.AdvanceMsSinceBoot();
+
+      old_time += 1000;
+    }
+
+    SystemInfo::idle_count++;
   }
 
   return 0;
