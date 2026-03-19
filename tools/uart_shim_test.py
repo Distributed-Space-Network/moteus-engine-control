@@ -11,64 +11,54 @@ def main():
     args = parser.parse_args()
 
     print(f"[INFO] Opening {args.port} at {args.baud} bps...")
-    try:
-        ser = serial.Serial(args.port, args.baud, timeout=20.0)
-    except Exception as e:
-        print(f"[ERROR] Failed to open port: {e}")
-        sys.exit(1)
+    ser = serial.Serial(args.port, args.baud, timeout=3.0)
 
-    # Capture boot diagnostic
-    print("[INFO] Waiting for boot data (reset board now if needed)...")
-    boot = ser.read(256)
-    if boot:
-        print(f"[BOOT] {len(boot)} bytes: {boot!r}")
-    else:
-        print("[BOOT] No boot data (board may have already booted)")
-    
-    # Flush any remaining boot noise
-    time.sleep(0.2)
+    # Brief settle + flush
+    time.sleep(0.3)
     ser.reset_input_buffer()
 
-    # Moteus Multiplex: make_position(query=True) payload
-    multiplex_payload = bytes.fromhex("01000a0d200000c07f11001f01130d")
-
-    # Send zero padding to re-align the UartMicroServer's 4-byte parser
-    print("\n[INFO] Sending alignment padding (100 x 0x00)...")
+    # Alignment padding
+    print("\n[INFO] Sending 100 x 0x00 alignment padding...")
     ser.write(b'\x00' * 100)
     ser.flush()
-    time.sleep(0.1)
+    time.sleep(0.3)
     ser.reset_input_buffer()
 
-    potential_destinations = [args.dest, 2, 3, 0x7F, 0xFF]
-    
-    for dest in potential_destinations:
-        source_id = 0x00
-        payload_len = len(multiplex_payload)
-        flags = 0x00
-        header = bytes([dest, source_id, payload_len, flags])
-        
-        print(f"\n[INFO] Pinging Destination ID: {dest}...")
-        print(f"[TX] Header (4 bytes): {header.hex().upper()}")
-        print(f"[TX] Payload ({payload_len} bytes): {multiplex_payload.hex().upper()}")
-        
-        ser.write(header + multiplex_payload)
+    # Moteus make_position(query=True) payload
+    multiplex_payload = bytes.fromhex("01000a0d200000c07f11001f01130d")
+    dest = args.dest
+    source_id = 0x00
+    header = bytes([dest, source_id, len(multiplex_payload), 0x00])
+    packet = header + multiplex_payload
+
+    print(f"\n[TX] Sending to dest={dest}: {packet.hex().upper()} ({len(packet)} bytes)")
+    ser.write(packet)
+    ser.flush()
+
+    # Now just listen for ANY response bytes for 3 seconds
+    ser.timeout = 3.0
+    print(f"\n[INFO] Listening for ANY response bytes (3s timeout)...")
+    response = ser.read(256)
+    if response:
+        print(f"[RX] Got {len(response)} bytes!")
+        print(f"[RX] Hex: {response.hex().upper()}")
+        print(f"[RX] ASCII: {response!r}")
+    else:
+        print(f"[RX] Got 0 bytes. No response at all.")
+        print()
+        print("[INFO] Trying a simple 'tel list\\n' text command on tunnel 1...")
+        # Try sending raw text command through the tunnel
+        # This tests if the multiplex protocol is even alive
+        cmd = b'\x01\x00\x0e\x00' + b'tel list\n'  # dest=1, src=0, len=9, flags=0
+        print(f"[TX] {cmd.hex().upper()}")
+        ser.write(cmd)
         ser.flush()
-
-        # Wait for 4-byte response header
-        resp_header = ser.read(4)
-        if len(resp_header) == 4:
-            r_dest, r_src, r_len, r_flags = resp_header
-            print(f"[RX] Header: dest={r_dest} src={r_src} len={r_len} flags={r_flags}")
-            if r_len > 0:
-                resp_payload = ser.read(r_len)
-                print(f"[RX] Payload ({len(resp_payload)} bytes): {resp_payload.hex().upper()}")
-            print(f"\n[SUCCESS] Got response from ID {r_src}!")
-            ser.close()
-            return
+        response2 = ser.read(256)
+        if response2:
+            print(f"[RX] {len(response2)} bytes: {response2!r}")
         else:
-            print(f"[WARNING] Timed out waiting for response from ID {dest}.")
+            print(f"[RX] Still nothing.")
 
-    print(f"\n[ERROR] No IDs responded.")
     ser.close()
 
 if __name__ == '__main__':

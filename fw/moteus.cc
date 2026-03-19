@@ -383,8 +383,21 @@ int main(void) {
 
 
   auto old_time = timer.read_us();
+  bool tx_test_done = false;
 
   for (;;) {
+    // One-time TX self-test after 2 seconds (raw register to avoid AsyncWriteSome conflict)
+    if (!tx_test_done) {
+      const auto now = timer.read_us();
+      if (MillisecondTimer::subtract_us(now, old_time) >= 2000000) {
+        const char* msg = "TX_OK\r\n";
+        while (*msg) {
+          while (!(USART1->ISR & (1 << 7))) {}
+          USART1->TDR = *msg++;
+        }
+        tx_test_done = true;
+      }
+    }
     if (rs485) {
       rs485->Poll();
     }
