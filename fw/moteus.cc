@@ -414,6 +414,34 @@ int main(void) {
     USART1->CR1 |= USART_CR1_RE | USART_CR1_TE | USART_CR1_UE;
   }
 
+  // Clear errors again after reconfiguration
+  USART1->ICR = 0xFFFFFFFF;
+
+  // ---- DIAGNOSTIC: Dump register state over TX ----
+  {
+    auto tx_byte = [](uint8_t b) {
+      while (!(USART1->ISR & (1 << 7))) {}
+      USART1->TDR = b;
+    };
+    auto tx_str = [&](const char* s) {
+      while (*s) { tx_byte(*s++); }
+    };
+    auto tx_hex32 = [&](uint32_t v) {
+      const char hex[] = "0123456789ABCDEF";
+      for (int i = 28; i >= 0; i -= 4) {
+        tx_byte(hex[(v >> i) & 0xF]);
+      }
+    };
+    
+    tx_str("DIAG: CR1=");   tx_hex32(USART1->CR1);
+    tx_str(" CR3=");         tx_hex32(USART1->CR3);
+    tx_str(" ISR=");         tx_hex32(USART1->ISR);
+    tx_str(" BRR=");         tx_hex32(USART1->BRR);
+    tx_str(" MODER=");       tx_hex32(GPIOB->MODER);
+    tx_str(" AFRL=");        tx_hex32(GPIOB->AFR[0]);
+    tx_str("\r\nECHO READY\r\n");
+  }
+
   for (;;) {
     // Check for received byte (RXNE flag = bit 5)
     if (USART1->ISR & (1 << 5)) { // RXNE
