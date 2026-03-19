@@ -382,22 +382,18 @@ int main(void) {
 
 
 
+  // TX self-test: fires immediately before main loop
+  {
+    const char* msg = "TX_OK\r\n";
+    while (*msg) {
+      while (!(USART1->ISR & (1 << 7))) {}
+      USART1->TDR = *msg++;
+    }
+  }
+
   auto old_time = timer.read_us();
-  const auto boot_time = old_time;
-  bool tx_test_done = false;
 
   for (;;) {
-    // One-time TX self-test after 2 seconds
-    if (!tx_test_done) {
-      if (MillisecondTimer::subtract_us(timer.read_us(), boot_time) >= 2000000) {
-        const char* msg = "TX_OK\r\n";
-        while (*msg) {
-          while (!(USART1->ISR & (1 << 7))) {}
-          USART1->TDR = *msg++;
-        }
-        tx_test_done = true;
-      }
-    }
     if (rs485) {
       rs485->Poll();
     }
