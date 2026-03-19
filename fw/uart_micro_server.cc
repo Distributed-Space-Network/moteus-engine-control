@@ -3,6 +3,7 @@
 #include "fw/uart_micro_server.h"
 
 #include <cstring>
+#include "mbed.h"
 
 namespace moteus {
 
@@ -108,6 +109,10 @@ void UartMicroServer::HandleReadPayload(const mjlib::micro::error_code& ec,
         });
     return;
   }
+  // DEBUG: 0xBB = full packet received, about to call MicroServer
+  while (!(USART1->ISR & (1 << 7))) {}
+  USART1->TDR = 0xBB;
+
   auto cb = current_read_callback_;
   current_read_callback_ = {};
   current_read_header_ = nullptr;
@@ -122,6 +127,10 @@ void UartMicroServer::AsyncWrite(const Header& header,
                                  const std::string_view& data,
                                  const Header& /*query_header*/,
                                  const SizeCallback& callback) {
+  // DEBUG: 0xCC = MicroServer called AsyncWrite (response generated)
+  while (!(USART1->ISR & (1 << 7))) {}
+  USART1->TDR = 0xCC;
+
   MJ_ASSERT(!current_write_callback_);
   current_write_callback_ = callback;
   write_header_buf_[0] = static_cast<uint8_t>(header.destination);

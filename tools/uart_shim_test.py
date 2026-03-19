@@ -24,13 +24,11 @@ def main():
     ser.reset_input_buffer()
 
     # Alignment padding
-    '''
     print("\n[INFO] Sending 100 x 0x00 alignment padding...")
     ser.write(b'\x00' * 100)
     ser.flush()
     time.sleep(0.3)
     ser.reset_input_buffer()
-    '''
 
     # Moteus make_position(query=True) payload
     multiplex_payload = bytes.fromhex("01000a0d200000c07f11001f01130d")
