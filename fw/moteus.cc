@@ -246,12 +246,10 @@ int main(void) {
         return options;
       }());
 #else
-  // IMPORTANT: For G431 hardware (moteus r4), PB6 and PB7 default to drv8323 pins.
-  // We MUST blank them to NC so that drv8323.cc doesn't force them to Input/Output overriding our UART!
-  moteus::g_hw_pins.drv8323_fault = NC;
-  moteus::g_hw_pins.drv8323_hiz = NC;
-
-  // DMA-free UART on USART1 (PB6/PB7).
+  // PB6 and PB7 are shared between DRV8323 (fault/hiz) and USART1 (TX/RX).
+  // We let DRV8323 configure them normally during MoteusController construction,
+  // then force them back to USART1 AF7 afterward. The DRV8323's BSRR writes
+  // are harmlessly ignored when MODER is set to AF mode.  // DMA-free UART on USART1 (PB6/PB7).
   // We CANNOT use DMA because aux2_port_ in MoteusController steals
   // DMA2_Channel1 and DMA2_Channel2, and there are no free DMA channels
   // on STM32G431. PollingUart uses pure RXNE/TXE register polling instead.
@@ -302,6 +300,14 @@ int main(void) {
   MoteusController moteus_controller(
       &pool, &persistent_config, &command_manager, &telemetry_manager,
       &multiplex_protocol, &clock, &system_info, &timer, &firmware_info, &uuid);
+
+  // Reclaim PB_6 (TX) and PB_7 (RX) from DRV8323 back to USART1 AF7.
+  GPIOB->MODER = (GPIOB->MODER & ~(3u << 12)) | (2u << 12);  // PB6 = AF
+  GPIOB->MODER = (GPIOB->MODER & ~(3u << 14)) | (2u << 14);  // PB7 = AF
+  GPIOB->AFR[0] = (GPIOB->AFR[0] & ~(0xFu << 24)) | (7u << 24); // PB6 AF7
+  GPIOB->AFR[0] = (GPIOB->AFR[0] & ~(0xFu << 28)) | (7u << 28); // PB7 AF7
+  USART1->CR1 |= USART_CR1_RE | USART_CR1_TE | USART_CR1_UE;
+  USART1->ICR = 0xFFFFFFFF;
 
   diag_msg("[2] POST MOTEUS_CTRL\r\n");
 
