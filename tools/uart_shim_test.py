@@ -1,70 +1,86 @@
 """
 Moteus UART Shim CLI — interactive motor controller over USART1.
 
-Usage:
-    python uart_shim_test.py -p COM5
-    python uart_shim_test.py -p COM5 -d 1 -b 115200
-
 Commands:
+    query / q       - Read mode, position, velocity, torque, voltage, temp, fault
     stop            - Stop the motor
-    query           - Read mode, position, velocity, torque, voltage, temp, fault
+    brake           - Brake mode (shorts windings)
     pos <p> [v] [t] - Position command (pos=revs, vel=rev/s, torque=Nm)
-    brake           - Brake mode (motor shorts windings)
-    zero [pos]      - Set current position as 'pos' (default 0.0)
+    watch [hz]      - Continuous query at given rate (default 2 Hz, Ctrl+C to stop)
+    fault-clear     - Clear fault state (transitions to stopped)
     raw <hex>       - Send raw multiplex subframe bytes
     help            - Show this help
-    quit            - Exit
+    quit / exit     - Exit
 """
 import argparse
 import serial
 import struct
 import time
+import math
 import sys
 
-# Moteus register map
+# -- Moteus Register Map --
 REG_MODE = 0x000
 REG_POSITION = 0x001
 REG_VELOCITY = 0x002
 REG_TORQUE = 0x003
+REG_Q_CURRENT = 0x004
+REG_D_CURRENT = 0x005
+REG_ABS_POSITION = 0x006
+REG_POWER = 0x007
+REG_MOTOR_TEMP = 0x00A
 REG_VOLTAGE = 0x00D
 REG_TEMPERATURE = 0x00E
 REG_FAULT = 0x00F
+
+REG_PWM_A = 0x010
+REG_PWM_B = 0x011
+REG_PWM_C = 0x012
+REG_V_PHASE_A = 0x014
+REG_V_PHASE_B = 0x015
+REG_V_PHASE_C = 0x016
+REG_VFOC_THETA = 0x018
+REG_VFOC_VOLTAGE = 0x019
+REG_V_DQ_D = 0x01A
+REG_V_DQ_Q = 0x01B
+
 REG_CMD_POSITION = 0x020
 REG_CMD_VELOCITY = 0x021
 REG_CMD_FEEDFORWARD_TORQUE = 0x022
 REG_CMD_KP_SCALE = 0x023
 REG_CMD_KD_SCALE = 0x024
+REG_CMD_MAX_TORQUE = 0x025
+REG_CMD_STOP_POSITION = 0x026
+REG_CMD_TIMEOUT = 0x027
 
 # Moteus modes
 MODE_STOPPED = 0
 MODE_FAULT = 1
+MODE_PWM = 5
+MODE_VOLTAGE = 6
+MODE_VOLTAGE_FOC = 7
+MODE_VOLTAGE_DQ = 8
+MODE_CURRENT = 9
 MODE_POSITION = 10
 MODE_BRAKE = 15
-MODE_ZERO_VEL = 5
-
-# Multiplex subframe opcodes
-WRITE_INT8  = 0x00  # + (count-1)
-WRITE_INT16 = 0x04
-WRITE_INT32 = 0x08
-WRITE_FLOAT = 0x0C
-READ_INT8   = 0x10
-READ_INT16  = 0x14
-READ_INT32  = 0x18
-READ_FLOAT  = 0x1C
-REPLY_INT8  = 0x20
-REPLY_INT16 = 0x24
-REPLY_INT32 = 0x28
-REPLY_FLOAT = 0x2C
 
 MODE_NAMES = {
-    0: "stopped", 1: "fault", 2: "preparing", 3: "stopped_cal",
-    5: "zero_vel", 10: "position", 11: "timeout", 12: "zero_vel_timed",
-    15: "brake",
+    0: "stopped", 1: "fault", 2: "enabling", 3: "calibrating",
+    4: "calib_complete", 5: "pwm", 6: "voltage", 7: "voltage_foc",
+    8: "voltage_dq", 9: "current", 10: "position", 11: "pos_timeout",
+    12: "zero_velocity", 13: "stay_within", 14: "meas_inductance", 15: "brake",
 }
+
+# -- Multiplex Subframe Encoding --
+# MicroServer encoding: type_length = (type * 4) + encoded_length
+# encoded_length: 0 = read varuint count from stream, 1-3 = direct count
+WRITE_INT8  = 0x00
+WRITE_FLOAT = 0x0C
+READ_INT8   = 0x10
+READ_FLOAT  = 0x1C
 
 
 def encode_varuint(value):
-    """Encode a varuint for the multiplex subframe register addresses."""
     result = bytearray()
     while value >= 0x80:
         result.append((value & 0x7F) | 0x80)
@@ -73,175 +89,212 @@ def encode_varuint(value):
     return bytes(result)
 
 
-def build_write_int8(register, value):
-    return bytes([WRITE_INT8]) + encode_varuint(register) + struct.pack('<b', value)
-
-
-def build_write_float(register, value):
-    return bytes([WRITE_FLOAT]) + encode_varuint(register) + struct.pack('<f', value)
-
-
-def build_write_floats(start_register, values):
-    n = len(values)
-    assert 1 <= n <= 4
-    data = bytes([WRITE_FLOAT + n - 1]) + encode_varuint(start_register)
-    for v in values:
-        data += struct.pack('<f', v)
+def _build_rw(base, count, start_register, values=None):
+    """Build a read or write subframe with correct encoded_length handling."""
+    # encoded_length = count for 1-3, varuint form for 4+
+    if 1 <= count <= 3:
+        data = bytes([base + count]) + encode_varuint(start_register)
+    else:
+        data = bytes([base]) + encode_varuint(count) + encode_varuint(start_register)
+    if values:
+        data += values
     return data
 
 
+def build_write_int8(register, value):
+    return _build_rw(WRITE_INT8, 1, register, struct.pack('<b', value))
+
+
+def build_write_floats(start_register, values):
+    packed = b''.join(struct.pack('<f', v) for v in values)
+    return _build_rw(WRITE_FLOAT, len(values), start_register, packed)
+
+
 def build_read_int8(start_register, count=1):
-    assert 1 <= count <= 4
-    return bytes([READ_INT8 + count - 1]) + encode_varuint(start_register)
+    return _build_rw(READ_INT8, count, start_register)
 
 
 def build_read_float(start_register, count=1):
-    assert 1 <= count <= 4
-    return bytes([READ_FLOAT + count - 1]) + encode_varuint(start_register)
+    return _build_rw(READ_FLOAT, count, start_register)
 
 
 def decode_response(payload):
-    """Decode multiplex reply subframes from a response payload."""
+    """Decode multiplex reply subframes."""
     results = {}
     i = 0
     while i < len(payload):
         cmd = payload[i]
         i += 1
-        if cmd >= REPLY_FLOAT and cmd < REPLY_FLOAT + 4:
-            count = (cmd - REPLY_FLOAT) + 1
-            if i >= len(payload):
-                break
-            start_reg = payload[i]
-            i += 1
-            for j in range(count):
-                if i + 4 <= len(payload):
-                    val = struct.unpack('<f', payload[i:i+4])[0]
-                    results[start_reg + j] = val
-                    i += 4
-        elif cmd >= REPLY_INT8 and cmd < REPLY_INT8 + 4:
-            count = (cmd - REPLY_INT8) + 1
-            if i >= len(payload):
-                break
-            start_reg = payload[i]
-            i += 1
-            for j in range(count):
-                if i < len(payload):
-                    results[start_reg + j] = payload[i]
-                    i += 1
-        elif cmd >= REPLY_INT16 and cmd < REPLY_INT16 + 4:
-            count = (cmd - REPLY_INT16) + 1
-            if i >= len(payload):
-                break
-            start_reg = payload[i]
-            i += 1
-            for j in range(count):
-                if i + 2 <= len(payload):
-                    val = struct.unpack('<h', payload[i:i+2])[0]
-                    results[start_reg + j] = val
-                    i += 2
-        elif cmd >= REPLY_INT32 and cmd < REPLY_INT32 + 4:
-            count = (cmd - REPLY_INT32) + 1
-            if i >= len(payload):
-                break
-            start_reg = payload[i]
-            i += 1
-            for j in range(count):
-                if i + 4 <= len(payload):
-                    val = struct.unpack('<i', payload[i:i+4])[0]
-                    results[start_reg + j] = val
-                    i += 4
+        if cmd < 0x20 or cmd >= 0x30:
+            break
+        type_length = cmd - 0x20
+        encoded_length = type_length % 4
+        data_type = type_length // 4  # 0=int8, 1=int16, 2=int32, 3=float
+
+        if encoded_length == 0:
+            if i >= len(payload): break
+            count = payload[i]; i += 1
         else:
-            break  # Unknown subframe type
+            count = encoded_length
+
+        if i >= len(payload): break
+        start_reg = payload[i]; i += 1
+
+        sizes = [1, 2, 4, 4]
+        fmts = ['<b', '<h', '<i', '<f']
+        sz = sizes[data_type]
+        for j in range(count):
+            if i + sz > len(payload): break
+            if sz == 1:
+                results[start_reg + j] = payload[i]
+            else:
+                results[start_reg + j] = struct.unpack(fmts[data_type], payload[i:i+sz])[0]
+            i += sz
     return results
+
+
+# -- Standard query subframe (reused by multiple commands) --
+QUERY_SUBFRAME = (
+    build_read_int8(REG_MODE, 1) +
+    build_read_float(REG_POSITION, 3) +
+    build_read_float(REG_VOLTAGE, 2) +
+    build_read_int8(REG_FAULT, 1)
+)
 
 
 def send_command(ser, dest, subframe):
     """Send a multiplex subframe and receive the response."""
-    source = 0x80  # Bit 7 must be set for response
-    header = bytes([dest, source, len(subframe), 0x00])
+    header = bytes([dest, 0x80, len(subframe), 0x00])
     ser.reset_input_buffer()
     ser.write(header + subframe)
     ser.flush()
-
-    # Read 4-byte response header
     resp_hdr = ser.read(4)
     if len(resp_hdr) < 4:
-        return None, None
-    r_dest, r_src, r_len, r_flags = resp_hdr
+        return None, b''
+    r_len = resp_hdr[2]
     payload = ser.read(r_len) if r_len > 0 else b''
     return resp_hdr, payload
 
 
+def format_query(regs):
+    """Format decoded registers into a readable status string."""
+    mode = regs.get(REG_MODE, '?')
+    mode_name = MODE_NAMES.get(mode, f"unknown({mode})")
+    lines = [f"  Mode: {mode_name}"]
+
+    def fval(reg, unit, fmt=".4f"):
+        v = regs.get(reg)
+        return f"{v:{fmt}} {unit}" if isinstance(v, float) else "?"
+
+    lines.append(f"  Pos:  {fval(REG_POSITION, 'rev')}")
+    lines.append(f"  Vel:  {fval(REG_VELOCITY, 'rev/s')}")
+    lines.append(f"  Trq:  {fval(REG_TORQUE, 'Nm')}")
+    lines.append(f"  Vbus: {fval(REG_VOLTAGE, 'V', '.2f')}")
+    lines.append(f"  Temp: {fval(REG_TEMPERATURE, '°C', '.1f')}")
+
+    fault = regs.get(REG_FAULT, '?')
+    fault_str = f"{fault}" + (" (none)" if fault == 0 else " ⚠")
+    lines.append(f"  Fault: {fault_str}")
+    return "\n".join(lines)
+
+
+def cmd_query(ser, dest, verbose=False):
+    resp_hdr, payload = send_command(ser, dest, QUERY_SUBFRAME)
+    if payload is None or resp_hdr is None:
+        print("  [ERROR] No response.")
+        return {}
+    if verbose and payload:
+        print(f"  [RAW] {payload.hex().upper()}")
+    regs = decode_response(payload)
+    print(format_query(regs))
+    return regs
+
+
 def cmd_stop(ser, dest):
-    subframe = build_write_int8(REG_MODE, MODE_STOPPED)
+    subframe = build_write_int8(REG_MODE, MODE_STOPPED) + QUERY_SUBFRAME
     _, payload = send_command(ser, dest, subframe)
-    print("  Motor stopped.")
+    regs = decode_response(payload or b'')
+    mode = MODE_NAMES.get(regs.get(REG_MODE, '?'), '?')
+    print(f"  Stopped. Mode: {mode}")
 
 
 def cmd_brake(ser, dest):
-    subframe = build_write_int8(REG_MODE, MODE_BRAKE)
+    subframe = build_write_int8(REG_MODE, MODE_BRAKE) + QUERY_SUBFRAME
     _, payload = send_command(ser, dest, subframe)
-    print("  Brake engaged.")
+    regs = decode_response(payload or b'')
+    mode = MODE_NAMES.get(regs.get(REG_MODE, '?'), '?')
+    print(f"  Brake engaged. Mode: {mode}")
 
 
-def cmd_query(ser, dest):
-    subframe = (
-        build_read_int8(REG_MODE, 1) +           # mode
-        build_read_float(REG_POSITION, 3) +       # pos, vel, torque
-        build_read_float(REG_VOLTAGE, 2) +        # voltage, temperature
-        build_read_int8(REG_FAULT, 1)             # fault
-    )
-    resp_hdr, payload = send_command(ser, dest, subframe)
-    if payload is None:
-        print("  [ERROR] No response.")
-        return
-    if resp_hdr:
-        print(f"  [RAW] hdr={resp_hdr.hex().upper()} payload={payload.hex().upper() if payload else '(empty)'}")
-    regs = decode_response(payload)
-    if regs:
-        print(f"  [DECODED] {regs}")
-    mode = regs.get(REG_MODE, '?')
-    mode_name = MODE_NAMES.get(mode, f"unknown({mode})")
-    print(f"  Mode:     {mode_name}")
-    print(f"  Position: {regs.get(REG_POSITION, '?'):.4f} rev" if isinstance(regs.get(REG_POSITION), float) else f"  Position: ?")
-    print(f"  Velocity: {regs.get(REG_VELOCITY, '?'):.4f} rev/s" if isinstance(regs.get(REG_VELOCITY), float) else f"  Velocity: ?")
-    print(f"  Torque:   {regs.get(REG_TORQUE, '?'):.4f} Nm" if isinstance(regs.get(REG_TORQUE), float) else f"  Torque:   ?")
-    print(f"  Voltage:  {regs.get(REG_VOLTAGE, '?'):.2f} V" if isinstance(regs.get(REG_VOLTAGE), float) else f"  Voltage:  ?")
-    print(f"  Temp:     {regs.get(REG_TEMPERATURE, '?'):.1f} °C" if isinstance(regs.get(REG_TEMPERATURE), float) else f"  Temp:     ?")
+def cmd_fault_clear(ser, dest):
+    # Writing mode=0 (stopped) clears faults
+    subframe = build_write_int8(REG_MODE, MODE_STOPPED) + QUERY_SUBFRAME
+    _, payload = send_command(ser, dest, subframe)
+    regs = decode_response(payload or b'')
+    mode = MODE_NAMES.get(regs.get(REG_MODE, '?'), '?')
     fault = regs.get(REG_FAULT, '?')
-    print(f"  Fault:    {fault}" + (" (none)" if fault == 0 else ""))
+    print(f"  Fault cleared. Mode: {mode}, Fault: {fault}")
 
 
-def cmd_position(ser, dest, pos, vel=None, torque=None):
+def cmd_voltage(ser, dest, d_v, q_v):
+    """Set voltage_dq mode with d/q voltages. No encoder needed."""
+    subframe = build_write_int8(REG_MODE, MODE_VOLTAGE_DQ)
+    subframe += build_write_floats(REG_V_DQ_D, [d_v, q_v])
+    subframe += QUERY_SUBFRAME
+    _, payload = send_command(ser, dest, subframe)
+    regs = decode_response(payload or b'')
+    print(format_query(regs))
+
+
+def cmd_vfoc(ser, dest, theta, voltage):
+    """Set voltage_foc mode with theta (rad) and voltage magnitude."""
+    subframe = build_write_int8(REG_MODE, MODE_VOLTAGE_FOC)
+    subframe += build_write_floats(REG_VFOC_THETA, [theta, voltage])
+    subframe += QUERY_SUBFRAME
+    _, payload = send_command(ser, dest, subframe)
+    regs = decode_response(payload or b'')
+    print(format_query(regs))
+
+
+def cmd_position(ser, dest, pos, vel=None, torque=None, kp=None, kd=None):
     subframe = build_write_int8(REG_MODE, MODE_POSITION)
-    cmd_values = [pos]
+    cmd_floats = [pos]
     if vel is not None:
-        cmd_values.append(vel)
+        cmd_floats.append(vel)
         if torque is not None:
-            cmd_values.append(torque)
-    subframe += build_write_floats(REG_CMD_POSITION, cmd_values)
-    # Also query status
-    subframe += (
-        build_read_int8(REG_MODE, 1) +
-        build_read_float(REG_POSITION, 3)
-    )
+            cmd_floats.append(torque)
+            if kp is not None:
+                cmd_floats.append(kp)
+                if kd is not None:
+                    cmd_floats.append(kd)
+    subframe += build_write_floats(REG_CMD_POSITION, cmd_floats)
+    subframe += QUERY_SUBFRAME
     _, payload = send_command(ser, dest, subframe)
-    if payload is None:
-        print("  [ERROR] No response.")
-        return
-    regs = decode_response(payload)
-    mode = regs.get(REG_MODE, '?')
-    mode_name = MODE_NAMES.get(mode, f"unknown({mode})")
-    p = regs.get(REG_POSITION, '?')
-    v = regs.get(REG_VELOCITY, '?')
-    print(f"  Mode: {mode_name} | Pos: {p:.4f} | Vel: {v:.4f}" if isinstance(p, float) else f"  Mode: {mode_name}")
+    regs = decode_response(payload or b'')
+    print(format_query(regs))
 
 
-def cmd_zero(ser, dest, zero_pos=0.0):
-    # Write the OutputNearest register (0x130) to set zero
-    subframe = build_write_float(0x130, zero_pos)
-    _, payload = send_command(ser, dest, subframe)
-    print(f"  Set current position as {zero_pos:.2f}")
+def cmd_watch(ser, dest, hz=2):
+    interval = 1.0 / hz
+    print(f"  Watching at {hz} Hz (Ctrl+C to stop)...")
+    try:
+        while True:
+            resp_hdr, payload = send_command(ser, dest, QUERY_SUBFRAME)
+            regs = decode_response(payload or b'')
+            mode = MODE_NAMES.get(regs.get(REG_MODE, '?'), '?')
+            pos = regs.get(REG_POSITION, float('nan'))
+            vel = regs.get(REG_VELOCITY, float('nan'))
+            trq = regs.get(REG_TORQUE, float('nan'))
+            vbus = regs.get(REG_VOLTAGE, float('nan'))
+            temp = regs.get(REG_TEMPERATURE, float('nan'))
+            fault = regs.get(REG_FAULT, '?')
+            line = (f"\r  {mode:12s} "
+                    f"pos={pos:+8.4f} vel={vel:+8.4f} trq={trq:+7.4f} "
+                    f"V={vbus:5.1f} T={temp:4.1f}°C F={fault}")
+            print(line, end='', flush=True)
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        print("\n  Stopped watching.")
 
 
 def cmd_raw(ser, dest, hex_str):
@@ -254,14 +307,31 @@ def cmd_raw(ser, dest, hex_str):
     if resp_hdr is None:
         print("  [ERROR] No response.")
         return
-    print(f"  Response header: {resp_hdr.hex().upper()}")
+    print(f"  TX: {subframe.hex().upper()} ({len(subframe)}b)")
+    print(f"  RX hdr: {resp_hdr.hex().upper()}")
     if payload:
-        print(f"  Response payload ({len(payload)}b): {payload.hex().upper()}")
+        print(f"  RX payload ({len(payload)}b): {payload.hex().upper()}")
         regs = decode_response(payload)
         if regs:
             print(f"  Decoded: {regs}")
     else:
         print(f"  (empty payload)")
+
+
+HELP_TEXT = """
+Commands:
+  query / q          Read motor status
+  stop               Stop the motor
+  brake              Brake mode (short windings)
+  fault-clear        Clear fault → stopped
+  pos P [V] [T]      Position cmd (revs, rev/s, Nm) — needs encoder
+  voltage D_V Q_V    Voltage DQ mode (volts) — no encoder needed
+  vfoc THETA VOLTAGE Voltage FOC mode (rad, volts)
+  watch [Hz]         Continuous status (default 2 Hz)
+  raw <hex>          Send raw multiplex subframe
+  help               This help
+  quit / exit        Exit
+"""
 
 
 def main():
@@ -271,12 +341,14 @@ def main():
     parser.add_argument("--dest", "-d", type=int, default=1, help="Destination ID")
     args = parser.parse_args()
 
-    print(f"[INFO] Opening {args.port} at {args.baud} bps (dest ID={args.dest})...")
+    print(f"Connecting to {args.port} @ {args.baud} (dest={args.dest})...")
     ser = serial.Serial(args.port, args.baud, timeout=1.0)
-    time.sleep(0.3)
+    time.sleep(0.5)
     ser.reset_input_buffer()
 
-    print("Moteus UART Shim CLI. Type 'help' for commands.\n")
+    # Initial status
+    cmd_query(ser, args.dest)
+    print(f"\nType 'help' for commands.\n")
 
     while True:
         try:
@@ -291,34 +363,51 @@ def main():
         parts = line.split()
         cmd = parts[0].lower()
 
-        if cmd in ('quit', 'exit', 'q'):
-            break
-        elif cmd == 'help':
-            print(__doc__)
-        elif cmd == 'stop':
-            cmd_stop(ser, args.dest)
-        elif cmd == 'brake':
-            cmd_brake(ser, args.dest)
-        elif cmd == 'query' or cmd == 'q?' or cmd == 'status':
-            cmd_query(ser, args.dest)
-        elif cmd in ('pos', 'position'):
-            if len(parts) < 2:
-                print("  Usage: pos <position> [velocity] [torque]")
-                continue
-            pos = float(parts[1])
-            vel = float(parts[2]) if len(parts) > 2 else None
-            torque = float(parts[3]) if len(parts) > 3 else None
-            cmd_position(ser, args.dest, pos, vel, torque)
-        elif cmd == 'zero':
-            zero_pos = float(parts[1]) if len(parts) > 1 else 0.0
-            cmd_zero(ser, args.dest, zero_pos)
-        elif cmd == 'raw':
-            if len(parts) < 2:
-                print("  Usage: raw <hex_bytes>")
-                continue
-            cmd_raw(ser, args.dest, parts[1])
-        else:
-            print(f"  Unknown command: {cmd}. Type 'help'.")
+        try:
+            if cmd in ('quit', 'exit'):
+                break
+            elif cmd == 'help':
+                print(HELP_TEXT)
+            elif cmd == 'stop':
+                cmd_stop(ser, args.dest)
+            elif cmd == 'brake':
+                cmd_brake(ser, args.dest)
+            elif cmd in ('query', 'q', 'status'):
+                cmd_query(ser, args.dest, verbose=('-v' in parts))
+            elif cmd == 'fault-clear':
+                cmd_fault_clear(ser, args.dest)
+            elif cmd in ('pos', 'position'):
+                if len(parts) < 2:
+                    print("  Usage: pos <position> [velocity] [torque] [kp_scale] [kd_scale]")
+                    continue
+                pos = float(parts[1])
+                vel = float(parts[2]) if len(parts) > 2 else None
+                torque = float(parts[3]) if len(parts) > 3 else None
+                kp = float(parts[4]) if len(parts) > 4 else None
+                kd = float(parts[5]) if len(parts) > 5 else None
+                cmd_position(ser, args.dest, pos, vel, torque, kp, kd)
+            elif cmd == 'voltage':
+                if len(parts) < 3:
+                    print("  Usage: voltage <d_V> <q_V>  (e.g. voltage 0 0.5)")
+                    continue
+                cmd_voltage(ser, args.dest, float(parts[1]), float(parts[2]))
+            elif cmd == 'vfoc':
+                if len(parts) < 3:
+                    print("  Usage: vfoc <theta_rad> <voltage>  (e.g. vfoc 0 0.5)")
+                    continue
+                cmd_vfoc(ser, args.dest, float(parts[1]), float(parts[2]))
+            elif cmd == 'watch':
+                hz = float(parts[1]) if len(parts) > 1 else 2.0
+                cmd_watch(ser, args.dest, hz)
+            elif cmd == 'raw':
+                if len(parts) < 2:
+                    print("  Usage: raw <hex_bytes>")
+                    continue
+                cmd_raw(ser, args.dest, parts[1])
+            else:
+                print(f"  Unknown: '{cmd}'. Type 'help'.")
+        except Exception as e:
+            print(f"  [ERROR] {e}")
 
     ser.close()
     print("Bye.")

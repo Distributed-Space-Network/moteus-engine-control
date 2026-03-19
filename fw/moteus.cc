@@ -366,6 +366,11 @@ int main(void) {
   persistent_config.Register("id", multiplex_protocol.config(), [](){});
 #endif
 
+#ifdef ERASE_PERSISTENT_CONFIG
+  // One-time erase: clears stale config from flash, then loads defaults.
+  // Remove this flag after first flash!
+  flash_interface.Erase();
+#endif
   persistent_config.Load();
 
   // CRITICAL: MoteusController's aux2_port_ called pin_function(PB_7, STM_MODE_ANALOG)
