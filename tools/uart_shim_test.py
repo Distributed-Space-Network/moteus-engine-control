@@ -11,18 +11,26 @@ def main():
     args = parser.parse_args()
 
     print(f"[INFO] Opening {args.port} at {args.baud} bps...")
-    ser = serial.Serial(args.port, args.baud, timeout=3.0)
+    ser = serial.Serial(args.port, args.baud, timeout=20.0)
 
-    # Brief settle + flush
-    time.sleep(0.3)
+    # Wait for board to fully boot (TX_OK fires at 2s after main loop starts)
+    print("[INFO] Waiting 20s for board to boot...")
+    time.sleep(20.0)
+    boot_data = ser.read(ser.in_waiting) if ser.in_waiting else b''
+    if boot_data:
+        print(f"[BOOT] Got {len(boot_data)} bytes: {boot_data!r}")
+    else:
+        print("[BOOT] No data received during boot.")
     ser.reset_input_buffer()
 
     # Alignment padding
+    '''
     print("\n[INFO] Sending 100 x 0x00 alignment padding...")
     ser.write(b'\x00' * 100)
     ser.flush()
     time.sleep(0.3)
     ser.reset_input_buffer()
+    '''
 
     # Moteus make_position(query=True) payload
     multiplex_payload = bytes.fromhex("01000a0d200000c07f11001f01130d")
@@ -35,9 +43,9 @@ def main():
     ser.write(packet)
     ser.flush()
 
-    # Now just listen for ANY response bytes for 3 seconds
-    ser.timeout = 3.0
-    print(f"\n[INFO] Listening for ANY response bytes (3s timeout)...")
+    # Now just listen for ANY response bytes for 10 seconds
+    ser.timeout = 10.0
+    print(f"\n[INFO] Listening for ANY response bytes (10s timeout)...")
     response = ser.read(256)
     if response:
         print(f"[RX] Got {len(response)} bytes!")
