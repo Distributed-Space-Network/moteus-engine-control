@@ -385,6 +385,13 @@ int main(void) {
   while (USART1->ISR & (1 << 5)) { (void)USART1->RDR; }
   USART1->ICR = 0xFFFFFFFF;
 
+  // Force multiplex ID to 1 in case flash had a different value
+  multiplex_protocol.config()->id = 1;
+
+  // Also re-force PB_6 (TX) to AF7 in case persistent_config.Load() retriggered DRV8323
+  GPIOB->MODER = (GPIOB->MODER & ~(3u << 12)) | (2u << 12);  // PB6 = AF
+  GPIOB->AFR[0] = (GPIOB->AFR[0] & ~(0xFu << 24)) | (7u << 24); // PB6 AF7
+
   multiplex_protocol.Start(moteus_controller.multiplex_server());
 
   auto old_time = timer.read_us();
