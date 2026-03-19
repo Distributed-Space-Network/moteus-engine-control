@@ -11,14 +11,14 @@ def main():
 
     print(f"[INFO] Opening {args.port} at {args.baud} bps...")
     try:
-        ser = serial.Serial(args.port, args.baud, timeout=3.0)
+        ser = serial.Serial(args.port, args.baud, timeout=20.0)
     except Exception as e:
         print(f"[ERROR] Failed to open port: {e}")
         sys.exit(1)
 
     # Wait for the diagnostic message from boot
-    print("\n[INFO] Waiting for boot diagnostic (reset/power-cycle the board now if needed)...")
-    print("[INFO] Reading for up to 3 seconds...\n")
+    print("\n[INFO] Waiting for boot diagnostic (reset/power-cycle the board now)...")
+    print("[INFO] Reading for up to 20 seconds...\n")
     
     boot_data = ser.read(512)
     if boot_data:

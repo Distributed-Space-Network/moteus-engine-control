@@ -256,12 +256,72 @@ int main(void) {
     Stm32G4AsyncUart::Options opts;
     opts.tx = PB_6;      // USART1 TX pin
     opts.rx = PB_7;      // USART1 RX pin
-    // Use valid channels on G431 (DMA1 has 6, DMA2 has 2). DMA2_Ch1/2 are strictly available.
     opts.rx_dma = DMA2_Channel2;
     opts.tx_dma = DMA2_Channel1;
-    opts.baud_rate = 115200; // 1 Mbit/s
+    opts.baud_rate = 115200;
     return opts;
   }());
+
+  // ================================================================
+  // ISOLATED ECHO TEST — runs BEFORE any motor controller init
+  // ================================================================
+  // Disable DMA on RX so we can poll RXNE directly
+  USART1->CR3 &= ~USART_CR3_DMAR;
+  USART1->ICR = 0xFFFFFFFF;
+  // Force PB_6=AF7(TX), PB_7=AF7(RX)
+  GPIOB->MODER = (GPIOB->MODER & ~(3u << 12)) | (2u << 12); // PB6 AF
+  GPIOB->MODER = (GPIOB->MODER & ~(3u << 14)) | (2u << 14); // PB7 AF
+  GPIOB->AFR[0] = (GPIOB->AFR[0] & ~(0xFu << 24)) | (7u << 24); // PB6 AF7
+  GPIOB->AFR[0] = (GPIOB->AFR[0] & ~(0xFu << 28)) | (7u << 28); // PB7 AF7
+  USART1->CR1 |= USART_CR1_RE | USART_CR1_TE | USART_CR1_UE;
+  USART1->ICR = 0xFFFFFFFF;
+
+  {
+    auto tx_byte = [](uint8_t b) {
+      while (!(USART1->ISR & (1 << 7))) {}
+      USART1->TDR = b;
+    };
+    auto tx_str = [&](const char* s) {
+      while (*s) { tx_byte(*s++); }
+    };
+    auto tx_hex32 = [&](uint32_t v) {
+      const char hex[] = "0123456789ABCDEF";
+      for (int i = 28; i >= 0; i -= 4) {
+        tx_byte(hex[(v >> i) & 0xF]);
+      }
+    };
+    
+    tx_str("DIAG: CR1=");   tx_hex32(USART1->CR1);
+    tx_str(" CR3=");         tx_hex32(USART1->CR3);
+    tx_str(" ISR=");         tx_hex32(USART1->ISR);
+    tx_str(" BRR=");         tx_hex32(USART1->BRR);
+    tx_str(" MODER=");       tx_hex32(GPIOB->MODER);
+    tx_str(" AFRL=");        tx_hex32(GPIOB->AFR[0]);
+    tx_str("\r\nECHO TEST ACTIVE\r\n");
+
+    auto old_time = timer.read_us();
+    bool led_on = true;
+    for (;;) {
+      if (USART1->ISR & (1 << 5)) { // RXNE
+        const uint8_t byte = USART1->RDR;
+        while (!(USART1->ISR & (1 << 7))) {} // TXE
+        USART1->TDR = byte;
+      }
+      if (USART1->ISR & (USART_ISR_ORE | USART_ISR_FE | USART_ISR_NE | USART_ISR_PE)) {
+        USART1->ICR = (USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_PECF | USART_ICR_NECF);
+      }
+      const auto new_time = timer.read_us();
+      if (MillisecondTimer::subtract_us(new_time, old_time) >= 1000000) {
+        old_time = new_time;
+        led_on = !led_on;
+        power_led = led_on ? 0 : 1;
+      }
+    }
+  }
+  // ================================================================
+  // END ISOLATED ECHO TEST — code below will never execute
+  // ================================================================
+
   UartMicroServer uart_micro_server(&uart1);
   multiplex::MicroServer multiplex_protocol(
       &pool, &uart_micro_server,
