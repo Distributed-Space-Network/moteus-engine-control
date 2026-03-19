@@ -378,18 +378,14 @@ int main(void) {
 
   moteus_controller.Start();
   command_manager.AsyncStart();
+
+  // CRITICAL: Drain any boot noise from USART1 RDR before starting the
+  // multiplex protocol. A stale 0x00 byte from USART init would shift
+  // all subsequent 4-byte headers by 1 byte, corrupting every packet.
+  while (USART1->ISR & (1 << 5)) { (void)USART1->RDR; }
+  USART1->ICR = 0xFFFFFFFF;
+
   multiplex_protocol.Start(moteus_controller.multiplex_server());
-
-
-
-  // TX self-test: fires immediately before main loop
-  {
-    const char* msg = "TX_OK\r\n";
-    while (*msg) {
-      while (!(USART1->ISR & (1 << 7))) {}
-      USART1->TDR = *msg++;
-    }
-  }
 
   auto old_time = timer.read_us();
 
