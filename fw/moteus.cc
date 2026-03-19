@@ -362,6 +362,16 @@ int main(void) {
   command_manager.AsyncStart();
   multiplex_protocol.Start(moteus_controller.multiplex_server());
 
+  // Diagnostic: confirm firmware reached main loop
+  {
+    auto tx = [](uint8_t b) {
+      while (!(USART1->ISR & (1 << 7))) {}
+      USART1->TDR = b;
+    };
+    const char* msg = "MAIN LOOP READY\r\n";
+    while (*msg) tx(*msg++);
+  }
+
   auto old_time = timer.read_us();
 
   for (;;) {
@@ -373,7 +383,6 @@ int main(void) {
     fdcan_micro_server.Poll();
 #else
     uart_micro_server.Poll();
-    uart1.Poll();
 #endif
 #endif
     moteus_controller.Poll();

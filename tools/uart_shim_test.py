@@ -17,7 +17,15 @@ def main():
         print(f"[ERROR] Failed to open port: {e}")
         sys.exit(1)
 
-    # Flush any boot noise
+    # Capture boot diagnostic
+    print("[INFO] Waiting for boot data (reset board now if needed)...")
+    boot = ser.read(256)
+    if boot:
+        print(f"[BOOT] {len(boot)} bytes: {boot!r}")
+    else:
+        print("[BOOT] No boot data (board may have already booted)")
+    
+    # Flush any remaining boot noise
     time.sleep(0.2)
     ser.reset_input_buffer()
 
