@@ -3,7 +3,6 @@
 #include "fw/uart_micro_server.h"
 
 #include <cstring>
-#include "mbed.h"
 
 namespace moteus {
 
@@ -53,34 +52,10 @@ void UartMicroServer::HandleReadHeader(const mjlib::micro::error_code& ec,
         });
     return;
   }
-  // Parse the 4‑byte header.
   current_read_header_->destination = read_header_buf_[0];
   current_read_header_->source      = read_header_buf_[1];
   current_read_header_->size        = read_header_buf_[2];
   current_read_header_->flags       = read_header_buf_[3];
-
-  // DEBUG: dump received header over raw TX
-  {
-    auto tx = [](uint8_t b) {
-      while (!(USART1->ISR & (1 << 7))) {}
-      USART1->TDR = b;
-    };
-    auto tx_hex = [&](uint8_t v) {
-      const char h[] = "0123456789ABCDEF";
-      tx(h[v >> 4]);
-      tx(h[v & 0xF]);
-    };
-    const char* p = "[RX HDR] ";
-    while (*p) tx(*p++);
-    tx_hex(read_header_buf_[0]);
-    tx(' ');
-    tx_hex(read_header_buf_[1]);
-    tx(' ');
-    tx_hex(read_header_buf_[2]);
-    tx(' ');
-    tx_hex(read_header_buf_[3]);
-    tx('\r'); tx('\n');
-  }
   // Limit payload to available buffer.
   size_t to_read = current_read_header_->size;
   // cast current_read_data_.size() to size_t to avoid signed/unsigned comparison
