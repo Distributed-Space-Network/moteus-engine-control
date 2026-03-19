@@ -143,8 +143,18 @@ class Drv8323::Impl {
 
     auto& s = status_;
 
+#if defined(USE_FDCAN)
     s.fault_line = fault_.read() == 0;
+#else
+    // In UART shim mode, PB_6 (fault pin) is USART1_TX — skip HW fault read
+    s.fault_line = false;
+#endif
+#if defined(USE_FDCAN)
     s.power = (hiz_->read() != 0);
+#else
+    // In UART shim mode, PB_7 (hiz pin) is USART1_RX — assume power is on
+    s.power = true;
+#endif
     s.enabled = enable_state_ != kDisabled;
 
     if (enable_state_ != kEnabled) {
@@ -447,8 +457,13 @@ bool Drv8323::fault() {
     const bool check_spi_fault = impl_->status_.fault == 1;
     return check_spi_fault;
   } else {
+#if defined(USE_FDCAN)
     const bool check_hw_fault =impl_->fault_.read() == 0;
     return check_hw_fault;
+#else
+    // In UART shim mode, PB_6 (fault pin) is USART1_TX — always report no fault
+    return false;
+#endif
   }
 }
 
