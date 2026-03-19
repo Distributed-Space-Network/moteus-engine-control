@@ -289,9 +289,21 @@ int main(void) {
   Uuid uuid(persistent_config);
   ClockManager clock(&timer, persistent_config, command_manager);
 
+  // Helper lambda for raw diagnostic TX
+  auto diag_msg = [](const char* msg) {
+    while (*msg) {
+      while (!(USART1->ISR & (1 << 7))) {}
+      USART1->TDR = *msg++;
+    }
+  };
+
+  diag_msg("[1] PRE MOTEUS_CTRL\r\n");
+
   MoteusController moteus_controller(
       &pool, &persistent_config, &command_manager, &telemetry_manager,
       &multiplex_protocol, &clock, &system_info, &timer, &firmware_info, &uuid);
+
+  diag_msg("[2] POST MOTEUS_CTRL\r\n");
 
   BoardDebug board_debug(
       &pool, &command_manager, &telemetry_manager,
@@ -356,21 +368,23 @@ int main(void) {
   persistent_config.Register("id", multiplex_protocol.config(), [](){});
 #endif
 
+  diag_msg("[3] PRE LOAD\r\n");
   persistent_config.Load();
+  diag_msg("[4] POST LOAD\r\n");
+
+  // CRITICAL: MoteusController's aux2_port_ called pin_function(PB_7, STM_MODE_ANALOG)
+  // during HandleConfigUpdate, killing our UART RX. persistent_config.Load() may have
+  // also retriggered it. Force PB_7 back to USART1_RX (AF7) now.
+  GPIOB->MODER = (GPIOB->MODER & ~(3u << 14)) | (2u << 14); // PB7 = AF mode
+  GPIOB->AFR[0] = (GPIOB->AFR[0] & ~(0xFu << 28)) | (7u << 28); // PB7 = AF7
+  USART1->CR1 |= USART_CR1_RE | USART_CR1_UE;
+  USART1->ICR = 0xFFFFFFFF;
 
   moteus_controller.Start();
   command_manager.AsyncStart();
   multiplex_protocol.Start(moteus_controller.multiplex_server());
 
-  // Diagnostic: confirm firmware reached main loop
-  {
-    auto tx = [](uint8_t b) {
-      while (!(USART1->ISR & (1 << 7))) {}
-      USART1->TDR = b;
-    };
-    const char* msg = "MAIN LOOP READY\r\n";
-    while (*msg) tx(*msg++);
-  }
+  diag_msg("[5] MAIN LOOP READY\r\n");
 
   auto old_time = timer.read_us();
 

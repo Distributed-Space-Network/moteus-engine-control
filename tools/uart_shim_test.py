@@ -12,7 +12,7 @@ def main():
 
     print(f"[INFO] Opening {args.port} at {args.baud} bps...")
     try:
-        ser = serial.Serial(args.port, args.baud, timeout=2.0)
+        ser = serial.Serial(args.port, args.baud, timeout=20.0)
     except Exception as e:
         print(f"[ERROR] Failed to open port: {e}")
         sys.exit(1)
