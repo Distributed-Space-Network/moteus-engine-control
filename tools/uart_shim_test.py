@@ -446,9 +446,23 @@ def main():
     args = parser.parse_args()
 
     print(f"Connecting to {args.port} @ {args.baud} (dest={args.dest})...")
-    ser = serial.Serial(args.port, args.baud, timeout=1.0)
-    time.sleep(0.5)
+    ser = serial.Serial(args.port, args.baud, timeout=20.0)
+
+    # Capture boot diagnostic output (firmware prints HW info at startup)
+    print("[BOOT] Waiting for boot output (20s)...")
+    time.sleep(20.0)
+    boot_data = ser.read(ser.in_waiting) if ser.in_waiting else b''
+    if boot_data:
+        # Try to decode as text, show hex for non-printable
+        try:
+            text = boot_data.decode('ascii', errors='replace')
+            print(f"[BOOT] {text.strip()}")
+        except:
+            print(f"[BOOT] {boot_data.hex().upper()}")
+    else:
+        print("[BOOT] (no boot output)")
     ser.reset_input_buffer()
+    ser.timeout = 1.0
 
     # Initial status
     cmd_query(ser, args.dest)
