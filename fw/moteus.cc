@@ -407,12 +407,6 @@ int main(void) {
   auto tx_str = [&](const char* s) {
     while (*s) { tx_byte(*s++); }
   };
-  auto tx_hex = [&](uint32_t v) {
-    for (int i = 28; i >= 0; i -= 4) {
-      uint8_t n = (v >> i) & 0xF;
-      tx_byte(n < 10 ? '0' + n : 'A' + n - 10);
-    }
-  };
   bool diag_done = false;
 #endif
 
