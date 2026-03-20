@@ -449,8 +449,27 @@ int main(void) {
         tx_byte('0' + g_measured_hw_family);
         tx_str(" ERR=");
         tx_byte('0' + moteus_controller.aux1_error());
-        tx_str(" SPI_MODE=");
-        tx_byte('0' + moteus_controller.aux1_spi_mode());
+        tx_str(" SPI1_EN=");
+        tx_byte((RCC->APB2ENR & RCC_APB2ENR_SPI1EN) ? '1' : '0');
+        tx_str(" ACT=");
+        tx_byte(moteus_controller.aux1_spi_active() ? '1' : '0');
+        tx_str(" NONCE=");
+        tx_byte('0' + moteus_controller.aux1_spi_nonce());
+        tx_str(" VAL=");
+        // Print value as decimal
+        {
+          uint32_t v = moteus_controller.aux1_spi_value();
+          char buf[12];
+          int pos = 0;
+          if (v == 0) { buf[pos++] = '0'; }
+          else {
+            char tmp[12]; int tpos = 0;
+            while (v > 0) { tmp[tpos++] = '0' + (v % 10); v /= 10; }
+            while (tpos > 0) { buf[pos++] = tmp[--tpos]; }
+          }
+          buf[pos] = 0;
+          tx_str(buf);
+        }
         tx_str("\r\n");
       }
 #endif

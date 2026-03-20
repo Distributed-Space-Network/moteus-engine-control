@@ -50,6 +50,9 @@ class MoteusController {
   BldcServo* bldc_servo();
   int aux1_error();
   int aux1_spi_mode();
+  bool aux1_spi_active();
+  uint32_t aux1_spi_value();
+  uint8_t aux1_spi_nonce();
 
   mjlib::multiplex::MicroServer::Server* multiplex_server();
 

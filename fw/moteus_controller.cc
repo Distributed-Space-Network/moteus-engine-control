@@ -546,6 +546,9 @@ class MoteusController::Impl : public multiplex::MicroServer::Server {
 
   int aux1_error() { return static_cast<int>(aux1_port_.status()->error); }
   int aux1_spi_mode() { return static_cast<int>(aux1_port_.config()->spi.mode); }
+  bool aux1_spi_active() { return aux1_port_.status()->spi.active; }
+  uint32_t aux1_spi_value() { return aux1_port_.status()->spi.value; }
+  uint8_t aux1_spi_nonce() { return aux1_port_.status()->spi.nonce; }
 
   void StartFrame() override {
     command_valid_ = false;
@@ -1254,6 +1257,18 @@ int MoteusController::aux1_error() {
 
 int MoteusController::aux1_spi_mode() {
   return impl_->aux1_spi_mode();
+}
+
+bool MoteusController::aux1_spi_active() {
+  return impl_->aux1_spi_active();
+}
+
+uint32_t MoteusController::aux1_spi_value() {
+  return impl_->aux1_spi_value();
+}
+
+uint8_t MoteusController::aux1_spi_nonce() {
+  return impl_->aux1_spi_nonce();
 }
 
 multiplex::MicroServer::Server* MoteusController::multiplex_server() {
