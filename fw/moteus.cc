@@ -399,6 +399,38 @@ int main(void) {
 
   multiplex_protocol.Start(moteus_controller.multiplex_server());
 
+#if !defined(USE_FDCAN)
+  // Boot diagnostic: print hw info via raw USART1 TX
+  {
+    auto tx_byte = [](uint8_t b) {
+      while (!(USART1->ISR & (1 << 7))) {}
+      USART1->TDR = b;
+    };
+    auto tx_str = [&](const char* s) {
+      while (*s) { tx_byte(*s++); }
+    };
+    auto tx_hex = [&](uint32_t v) {
+      for (int i = 28; i >= 0; i -= 4) {
+        uint8_t n = (v >> i) & 0xF;
+        tx_byte(n < 10 ? '0' + n : 'A' + n - 10);
+      }
+    };
+    tx_str("HW_FAM=");
+    tx_byte('0' + g_measured_hw_family);
+    tx_str(" HW_REV=");
+    tx_byte('0' + g_measured_hw_rev);
+    tx_str(" SPI1_EN=");
+    tx_byte((RCC->APB2ENR & RCC_APB2ENR_SPI1EN) ? '1' : '0');
+    tx_str(" SPI2_EN=");
+    tx_byte((RCC->APB1ENR1 & RCC_APB1ENR1_SPI2EN) ? '1' : '0');
+    tx_str(" SPI1_SR=");
+    tx_hex(SPI1->SR);
+    tx_str(" SPI2_SR=");
+    tx_hex(SPI2->SR);
+    tx_str("\r\n");
+  }
+#endif
+
   auto old_time = timer.read_us();
 
   for (;;) {
