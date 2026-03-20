@@ -449,20 +449,8 @@ int main(void) {
         tx_byte('0' + g_measured_hw_family);
         tx_str(" ERR=");
         tx_byte('0' + moteus_controller.aux1_error());
-
-        // Test SPI1 pinmap lookups directly
-        const auto spi1 = reinterpret_cast<uint32_t>(SPI1);
-        // PA_5 should be SPI1_SCK
-        tx_str(" PA5_SCK=");
-        tx_byte(pinmap_find_peripheral(PA_5, PinMap_SPI_SCLK) == spi1 ? 'Y' : 'N');
-        tx_str(" PA5_MOSI=");
-        tx_byte(pinmap_find_peripheral(PA_5, PinMap_SPI_MOSI) == spi1 ? 'Y' : 'N');
-        // PB_4 should be SPI1_MISO
-        tx_str(" PB4_MISO=");
-        tx_byte(pinmap_find_peripheral(PB_4, PinMap_SPI_MISO) == spi1 ? 'Y' : 'N');
-        // PA_7 should be SPI1_MOSI
-        tx_str(" PA7_MOSI=");
-        tx_byte(pinmap_find_peripheral(PA_7, PinMap_SPI_MOSI) == spi1 ? 'Y' : 'N');
+        tx_str(" SPI_MODE=");
+        tx_byte('0' + moteus_controller.aux1_spi_mode());
         tx_str("\r\n");
       }
 #endif

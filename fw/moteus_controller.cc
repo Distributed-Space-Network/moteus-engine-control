@@ -545,6 +545,7 @@ class MoteusController::Impl : public multiplex::MicroServer::Server {
   }
 
   int aux1_error() { return static_cast<int>(aux1_port_.status()->error); }
+  int aux1_spi_mode() { return static_cast<int>(aux1_port_.config()->spi.mode); }
 
   void StartFrame() override {
     command_valid_ = false;
@@ -1249,6 +1250,10 @@ BldcServo* MoteusController::bldc_servo() {
 
 int MoteusController::aux1_error() {
   return impl_->aux1_error();
+}
+
+int MoteusController::aux1_spi_mode() {
+  return impl_->aux1_spi_mode();
 }
 
 multiplex::MicroServer::Server* MoteusController::multiplex_server() {
