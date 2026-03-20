@@ -1247,6 +1247,10 @@ BldcServo* MoteusController::bldc_servo() {
   return &impl_->bldc_;
 }
 
+int MoteusController::aux1_error() const {
+  return impl_->aux1_error();
+}
+
 multiplex::MicroServer::Server* MoteusController::multiplex_server() {
   return impl_.get();
 }

@@ -48,6 +48,7 @@ class MoteusController {
   void PollMillisecond();
 
   BldcServo* bldc_servo();
+  int aux1_error() const;
 
   mjlib::multiplex::MicroServer::Server* multiplex_server();
 
