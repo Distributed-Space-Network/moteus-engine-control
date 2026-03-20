@@ -544,7 +544,7 @@ class MoteusController::Impl : public multiplex::MicroServer::Server {
     motor_position_.PollMillisecond();
   }
 
-  int aux1_error() const { return static_cast<int>(aux1_port_.status()->error); }
+  int aux1_error() { return static_cast<int>(aux1_port_.status()->error); }
 
   void StartFrame() override {
     command_valid_ = false;
@@ -1247,7 +1247,7 @@ BldcServo* MoteusController::bldc_servo() {
   return &impl_->bldc_;
 }
 
-int MoteusController::aux1_error() const {
+int MoteusController::aux1_error() {
   return impl_->aux1_error();
 }
 
