@@ -451,20 +451,24 @@ int main(void) {
       // Delayed boot diagnostic (2 seconds after start)
       if (!diag_done && timer.ms_since_boot() > 2000) {
         diag_done = true;
-        tx_str("HW_FAM=");
+        tx_str("FAM=");
         tx_byte('0' + g_measured_hw_family);
-        tx_str(" HW_REV=");
-        tx_byte('0' + g_measured_hw_rev);
-        tx_str(" SPI1_EN=");
-        tx_byte((RCC->APB2ENR & RCC_APB2ENR_SPI1EN) ? '1' : '0');
-        tx_str(" SPI2_EN=");
-        tx_byte((RCC->APB1ENR1 & RCC_APB1ENR1_SPI2EN) ? '1' : '0');
-        tx_str(" SPI1_SR=");
-        tx_hex(SPI1->SR);
-        tx_str(" SPI1_CR1=");
-        tx_hex(SPI1->CR1);
-        tx_str(" AUX1_ERR=");
+        tx_str(" ERR=");
         tx_byte('0' + moteus_controller.aux1_error());
+
+        // Test SPI1 pinmap lookups directly
+        const auto spi1 = reinterpret_cast<uint32_t>(SPI1);
+        // PA_5 should be SPI1_SCK
+        tx_str(" PA5_SCK=");
+        tx_byte(pinmap_find_peripheral(PA_5, PinMap_SPI_SCLK) == spi1 ? 'Y' : 'N');
+        tx_str(" PA5_MOSI=");
+        tx_byte(pinmap_find_peripheral(PA_5, PinMap_SPI_MOSI) == spi1 ? 'Y' : 'N');
+        // PB_4 should be SPI1_MISO
+        tx_str(" PB4_MISO=");
+        tx_byte(pinmap_find_peripheral(PB_4, PinMap_SPI_MISO) == spi1 ? 'Y' : 'N');
+        // PA_7 should be SPI1_MOSI
+        tx_str(" PA7_MOSI=");
+        tx_byte(pinmap_find_peripheral(PA_7, PinMap_SPI_MOSI) == spi1 ? 'Y' : 'N');
         tx_str("\r\n");
       }
 #endif
