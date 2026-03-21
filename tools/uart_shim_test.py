@@ -254,8 +254,10 @@ def cmd_voltage(ser, dest, d_v, q_v):
 
 def cmd_vfoc(ser, dest, theta, voltage):
     """Set voltage_foc mode with theta (rad) and voltage magnitude."""
+    # Firmware does: theta_internal = value * pi
+    # So we send theta_rad / pi to get correct electrical angle
     subframe = build_write_int8(REG_MODE, MODE_VOLTAGE_FOC)
-    subframe += build_write_floats(REG_VFOC_THETA, [theta, voltage])
+    subframe += build_write_floats(REG_VFOC_THETA, [theta / math.pi, voltage])
     subframe += QUERY_SUBFRAME
     _, payload = send_command(ser, dest, subframe)
     regs = decode_response(payload or b'')
@@ -411,6 +413,153 @@ def cmd_diag(ser, dest, text):
         print("  (no response)")
 
 
+def _vfoc_and_read(ser, dest, theta, voltage):
+    """Apply voltage_foc at given theta (rad), return position in revolutions."""
+    # Firmware does: theta_internal = value * pi
+    subframe = build_write_int8(REG_MODE, MODE_VOLTAGE_FOC)
+    subframe += build_write_floats(REG_VFOC_THETA, [theta / math.pi, voltage])
+    subframe += QUERY_SUBFRAME
+    _, payload = send_command(ser, dest, subframe)
+    regs = decode_response(payload or b'')
+    return regs.get(REG_POSITION, 0.0)
+
+
+def cmd_calibrate(ser, dest, cal_voltage=3.0):
+    """Automated phase offset calibration over UART.
+    
+    Sweeps electrical angle, reads encoder, calculates offset.
+    """
+    poles = 14  # GIM6010-8 pole pairs
+    num_steps = 32
+    settle_time = 0.5
+
+    print(f"  === Phase Offset Calibration ===")
+    print(f"  Voltage: {cal_voltage}V, Poles: {poles}, Steps: {num_steps}")
+    print(f"  WARNING: Motor will move! Ensure it's free to rotate.")
+    print()
+
+    # Step 1: Stop and clear faults
+    cmd_stop(ser, dest)
+    time.sleep(0.3)
+
+    # Step 2: Snap to theta=0, let motor settle
+    print("  [1/4] Snapping to electrical angle 0...")
+    _vfoc_and_read(ser, dest, 0.0, cal_voltage)
+    time.sleep(2.0)  # Longer settle for initial snap
+
+    # Step 3: Forward sweep 0 → 2π
+    print("  [2/4] Forward sweep...")
+    forward_data = []
+    for i in range(num_steps + 1):
+        theta = (2.0 * math.pi * i) / num_steps
+        pos = _vfoc_and_read(ser, dest, theta, cal_voltage)
+        time.sleep(settle_time)
+        # Re-read for stable value
+        pos = _vfoc_and_read(ser, dest, theta, cal_voltage)
+        forward_data.append((theta, pos))
+        print(f"\r    Step {i}/{num_steps}: θ={math.degrees(theta):6.1f}° pos={pos:.6f} rev", end='', flush=True)
+    print()
+
+    # Step 4: Reverse sweep 2π → 0
+    print("  [3/4] Reverse sweep...")
+    reverse_data = []
+    for i in range(num_steps, -1, -1):
+        theta = (2.0 * math.pi * i) / num_steps
+        pos = _vfoc_and_read(ser, dest, theta, cal_voltage)
+        time.sleep(settle_time)
+        pos = _vfoc_and_read(ser, dest, theta, cal_voltage)
+        reverse_data.append((theta, pos))
+        print(f"\r    Step {num_steps - i}/{num_steps}: θ={math.degrees(theta):6.1f}° pos={pos:.6f} rev", end='', flush=True)
+    print()
+
+    # Step 5: Stop motor
+    cmd_stop(ser, dest)
+
+    # Step 6: Calculate offset
+    # Average forward and reverse to cancel backlash/friction
+    # At theta=0 (electrical angle 0), the encoder position IS the offset
+    pos_at_0_fwd = forward_data[0][1]
+    pos_at_0_rev = reverse_data[-1][1]  # Last in reverse = theta=0
+    offset = (pos_at_0_fwd + pos_at_0_rev) / 2.0
+
+    # Check direction: if position increased with theta, sign = 1
+    pos_start = forward_data[0][1]
+    pos_end = forward_data[-1][1]
+    delta = pos_end - pos_start  # Should be ~1/poles revolutions
+    expected_delta = 1.0 / poles  # One electrical revolution in mechanical terms
+    
+    if abs(delta) < expected_delta * 0.3:
+        print(f"  ⚠ WARNING: Motor barely moved ({delta:.6f} rev). Check voltage or encoder.")
+        return
+
+    sign = 1 if delta > 0 else -1
+    print(f"\n  [4/4] Results:")
+    print(f"    Position at θ=0 (fwd):  {pos_at_0_fwd:.6f} rev")
+    print(f"    Position at θ=0 (rev):  {pos_at_0_rev:.6f} rev")
+    print(f"    Calculated offset:      {offset:.6f} rev")
+    print(f"    Motion delta:           {delta:.6f} rev (expected ±{expected_delta:.4f})")
+    print(f"    Motor direction:        {'forward' if sign > 0 else 'reverse'} (sign={sign})")
+
+    # Step 7: Write to config
+    print(f"\n  Writing calibration...")
+    resp = send_tunnel(ser, dest, f'conf set motor_position.sources.0.offset {offset:.6f}')
+    print(f"    offset: {resp.strip() if resp else '?'}")
+    time.sleep(0.3)
+    resp = send_tunnel(ser, dest, f'conf set motor_position.sources.0.sign {sign}')
+    print(f"    sign: {resp.strip() if resp else '?'}")
+    time.sleep(0.3)
+    resp = send_tunnel(ser, dest, 'conf write')
+    print(f"    conf write: {resp.strip() if resp else '?'}")
+
+    print(f"\n  ✓ Calibration complete! Try: goto 0")
+
+
+def cmd_move(ser, dest, delta_rev, voltage=2.0, speed=0.5):
+    """Move motor by sweeping vfoc angle — proven reliable method.
+    
+    delta_rev: motor revolutions to move (positive or negative).
+    voltage: holding voltage (default 2V, safe for long moves).
+    """
+    poles = 14  # physical pole pairs
+    steps_per_rev = 8  # steps per electrical revolution (fewer = faster)
+    
+    elec_revs = -delta_rev * poles
+    total_steps = max(int(abs(elec_revs) * steps_per_rev), 1)
+    step_size = (elec_revs * 2 * math.pi) / total_steps
+
+    # Read start position
+    _, payload = send_command(ser, dest, QUERY_SUBFRAME)
+    regs = decode_response(payload or b'')
+    start_pos = regs.get(REG_POSITION, 0.0)
+
+    print(f"  Moving {delta_rev:+.4f} rev ({total_steps} steps, {voltage}V)")
+
+    # Snap to angle 0 first
+    _vfoc_and_read(ser, dest, 0.0, voltage)
+    time.sleep(0.3)
+
+    # Sweep theta — no sleep, serial round-trip is the rate limiter
+    theta = 0.0
+    for i in range(total_steps):
+        theta += step_size
+        _vfoc_and_read(ser, dest, theta, voltage)
+
+        if (i + 1) % (steps_per_rev * poles) == 0 or i == total_steps - 1:
+            _, payload = send_command(ser, dest, QUERY_SUBFRAME)
+            regs = decode_response(payload or b'')
+            pos = regs.get(REG_POSITION, 0.0)
+            print(f"\r  {i+1}/{total_steps}: pos={pos:.4f} moved={pos - start_pos:+.4f}", end='', flush=True)
+
+    # Final position
+    _, payload = send_command(ser, dest, QUERY_SUBFRAME)
+    regs = decode_response(payload or b'')
+    final_pos = regs.get(REG_POSITION, 0.0)
+    total_moved = final_pos - start_pos
+
+    cmd_stop(ser, dest)
+    print(f"\n  ✓ Done: {start_pos:.4f} → {final_pos:.4f} (moved {total_moved:+.4f} rev)")
+
+
 HELP_TEXT = """
 Commands:
   query / q          Read motor status
@@ -435,6 +584,8 @@ Examples:
   conf write           Save config to flash
   conf default         Reset config to defaults
   tel list             List telemetry channels
+
+  calibrate [V]        Run phase offset calibration (default 3V)
 """
 
 
@@ -443,26 +594,30 @@ def main():
     parser.add_argument("--port", "-p", default="COM3", help="Serial port")
     parser.add_argument("--baud", "-b", type=int, default=115200, help="Baud rate")
     parser.add_argument("--dest", "-d", type=int, default=1, help="Destination ID")
+    parser.add_argument("--boot-wait", "-w", type=float, default=0, help="Boot wait seconds (0=skip)")
     args = parser.parse_args()
 
     print(f"Connecting to {args.port} @ {args.baud} (dest={args.dest})...")
-    ser = serial.Serial(args.port, args.baud, timeout=20.0)
+    ser = serial.Serial(args.port, args.baud, timeout=1.0)
 
-    # Capture boot diagnostic output (firmware prints HW info at startup)
-    print("[BOOT] Waiting for boot output (20s)...")
-    time.sleep(20.0)
-    boot_data = ser.read(ser.in_waiting) if ser.in_waiting else b''
-    if boot_data:
-        # Try to decode as text, show hex for non-printable
-        try:
-            text = boot_data.decode('ascii', errors='replace')
-            print(f"[BOOT] {text.strip()}")
-        except:
-            print(f"[BOOT] {boot_data.hex().upper()}")
+    if args.boot_wait > 0:
+        ser.timeout = args.boot_wait
+        print(f"[BOOT] Waiting for boot output ({args.boot_wait}s)...")
+        time.sleep(args.boot_wait)
+        boot_data = ser.read(ser.in_waiting) if ser.in_waiting else b''
+        if boot_data:
+            try:
+                text = boot_data.decode('ascii', errors='replace')
+                print(f"[BOOT] {text.strip()}")
+            except:
+                print(f"[BOOT] {boot_data.hex().upper()}")
+        else:
+            print("[BOOT] (no boot output)")
+        ser.reset_input_buffer()
+        ser.timeout = 1.0
     else:
-        print("[BOOT] (no boot output)")
-    ser.reset_input_buffer()
-    ser.timeout = 1.0
+        time.sleep(0.5)
+        ser.reset_input_buffer()
 
     # Initial status
     cmd_query(ser, args.dest)
@@ -537,6 +692,17 @@ def main():
                     print("  Usage: diag <command text>")
                     continue
                 cmd_diag(ser, args.dest, ' '.join(parts[1:]))
+            elif cmd == 'calibrate':
+                cal_v = float(parts[1]) if len(parts) > 1 else 3.0
+                cmd_calibrate(ser, args.dest, cal_v)
+            elif cmd == 'move':
+                if len(parts) < 2:
+                    print("  Usage: move <delta_rev> [voltage] [speed]")
+                    continue
+                delta = float(parts[1])
+                v = float(parts[2]) if len(parts) > 2 else 3.0
+                spd = float(parts[3]) if len(parts) > 3 else 0.5
+                cmd_move(ser, args.dest, delta, v, spd)
             else:
                 print(f"  Unknown: '{cmd}'. Type 'help'.")
         except Exception as e:
