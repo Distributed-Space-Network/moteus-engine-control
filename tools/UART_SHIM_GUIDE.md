@@ -16,15 +16,27 @@ Commands are tunneled through the multiplex protocol over serial at 115200 baud.
 python uart_shim_test.py -p COM5
 ```
 
-Boot output shows hardware status:
+Boot output (only after power cycle/reflash):
 ```
 FAM=2 ERR=0 SPI_MODE=0
-  Mode: stopped
-  Pos:  0.0000 rev
-  Fault: 0 (none)
+```
+`ERR=0` = encoder OK. If `ERR=1`, check `aux1.spi.mode` config.
+Use `--no-boot-wait` to skip waiting for boot output.
+
+## Motor ID
+
+Each motor on the bus needs a unique ID (default: 1).
+
+```
+conf get id.id          # Read current ID
+conf set id.id 2        # Set ID to 2
+conf write              # Save to flash
 ```
 
-`ERR=0` = encoder OK. If `ERR=1`, check `aux1.spi.mode` config.
+After changing, reconnect with the new destination:
+```bash
+python uart_shim_test.py -p COM5 -d 2
+```
 
 ## Initial Motor Setup
 
@@ -85,6 +97,8 @@ encoder offset, and writes it to flash. The motor will move slightly.
 | `conf get <key>` | Read config value | `conf get motor.Kv` |
 | `conf write` | Save config to flash | `conf write` |
 | `conf default` | Reset all to defaults | `conf default` (⚠ power cycle after) |
+| `conf get id.id` | Read motor ID | `conf get id.id` |
+| `conf set id.id <N>` | Set motor ID | `conf set id.id 2` |
 | `raw <hex>` | Raw multiplex frame | `raw 1D06` |
 
 ### Diagnostics
