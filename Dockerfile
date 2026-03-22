@@ -34,7 +34,7 @@ RUN curl -L https://github.com/bazelbuild/bazelisk/releases/latest/download/baze
     -o /usr/local/bin/bazel && \
     chmod +x /usr/local/bin/bazel
 
-# სამუშაო directory
+# Workspace directory
 WORKDIR /workspace
 
 # Clone YOUR fork + checkout test branch
