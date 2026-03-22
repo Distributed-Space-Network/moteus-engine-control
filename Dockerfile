@@ -39,8 +39,9 @@ WORKDIR /workspace
 
 # Clone YOUR fork + checkout test branch
 RUN git clone https://github.com/Distributed-Space-Network/moteus-engine-control.git && \
-    cd moteus-engine-control && \
-    git checkout test
+    cd moteus-engine-control
+#cd moteus-engine-control && \
+#git checkout test
 
 # Enter repo
 WORKDIR /workspace/moteus-engine-control
