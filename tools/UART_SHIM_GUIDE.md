@@ -16,6 +16,15 @@ Commands are tunneled through the multiplex protocol over serial at 115200 baud.
 python uart_shim_test.py -p COM5
 ```
 
+### CLI Arguments
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `-p`, `--port` | Serial port | COM3 |
+| `-d`, `--dest` | Target motor ID | 1 |
+| `-b`, `--baud` | Baud rate | 115200 |
+| `-w`, `--boot-wait` | Boot wait seconds (0=skip) | 0 |
+
 Boot output (only after power cycle/reflash):
 ```
 FAM=2 ERR=0 SPI_MODE=0
@@ -88,6 +97,7 @@ encoder offset, and writes it to flash. The motor will move slightly.
 | `vfoc <θ> <V>` | Voltage at electrical angle (rad) | `vfoc 1.57 2.0` |
 | `pos <pos> <vel>` | Firmware position mode | `pos 0 0.1` |
 | `calibrate [V]` | Phase offset calibration | `calibrate 3.0` |
+| `move <rev> [V]` | vfoc sweep (reliable) | `move 8 2.0` (full output rev) |
 
 ### Configuration
 
@@ -97,9 +107,90 @@ encoder offset, and writes it to flash. The motor will move slightly.
 | `conf get <key>` | Read config value | `conf get motor.Kv` |
 | `conf write` | Save config to flash | `conf write` |
 | `conf default` | Reset all to defaults | `conf default` (⚠ power cycle after) |
+| `conf list` | List config sections | `conf list` |
+| `conf enumerate <sec>` | List keys in section | `conf enumerate servo` |
 | `conf get id.id` | Read motor ID | `conf get id.id` |
 | `conf set id.id <N>` | Set motor ID | `conf set id.id 2` |
 | `raw <hex>` | Raw multiplex frame | `raw 1D06` |
+
+### Common Configuration Keys
+
+#### Motor Parameters
+| Key | Description | Default | GIM6010-8 |
+|-----|-------------|---------|-----------|
+| `motor.poles` | Total pole count (NOT pairs) | 1 | 28 |
+| `motor.Kv` | Speed constant (rpm/V) | 0 | 11.54 |
+| `motor.resistance_ohm` | Phase resistance (Ω) | 0 | 0.22 |
+
+#### Position PID (`servo.pid_position`)
+| Key | Description | Example |
+|-----|-------------|---------|
+| `servo.pid_position.kp` | Proportional gain | `conf set servo.pid_position.kp 50.0` |
+| `servo.pid_position.ki` | Integral gain | `conf set servo.pid_position.ki 0.0` |
+| `servo.pid_position.kd` | Derivative gain | `conf set servo.pid_position.kd 1.0` |
+
+#### Current PID (`servo.pid_dq`)
+| Key | Description | Example |
+|-----|-------------|---------|
+| `servo.pid_dq.kp` | Current loop proportional | `conf set servo.pid_dq.kp 1.0` |
+| `servo.pid_dq.ki` | Current loop integral | `conf set servo.pid_dq.ki 200.0` |
+
+#### Servo Limits
+| Key | Description | Default | Example |
+|-----|-------------|---------|---------|
+| `servo.max_current_A` | Max phase current | 20.0 (fam 2) | `conf set servo.max_current_A 5.0` |
+| `servo.max_voltage` | Max output voltage | 24.0 | `conf set servo.max_voltage 24.0` |
+| `servo.default_timeout_s` | Position cmd timeout | 0.1 | `conf set servo.default_timeout_s 20.0` |
+| `servo.fault_temperature` | FET temp fault (°C) | 78.0 | `conf set servo.fault_temperature 100.0` |
+| `servo.temperature_margin` | Derate before fault (°C) | 20.0 | `conf set servo.temperature_margin 20.0` |
+| `servo.voltage_mode_control` | Voltage-based pos mode | 0 | `conf set servo.voltage_mode_control 1` |
+
+#### Velocity & Acceleration Limits
+| Key | Description | Default | Example |
+|-----|-------------|---------|---------|
+| `servo.max_velocity` | Max velocity (rev/s) | 500.0 | `conf set servo.max_velocity 50.0` |
+| `servo.default_velocity_limit` | Pos mode vel limit | NaN | `conf set servo.default_velocity_limit 5.0` |
+| `servo.default_accel_limit` | Pos mode accel limit | NaN | `conf set servo.default_accel_limit 10.0` |
+
+#### Timeout Behavior
+| Key | Description | Default | Example |
+|-----|-------------|---------|---------|
+| `servo.default_timeout_s` | Seconds before timeout | 0.1 | `conf set servo.default_timeout_s 20.0` |
+| `servo.timeout_max_torque_Nm` | Torque limit in timeout | 5.0 | `conf set servo.timeout_max_torque_Nm 2.0` |
+| `servo.timeout_mode` | 0=stop, 10=hold, 12=zero_vel, 15=brake | 12 | `conf set servo.timeout_mode 0` |
+
+#### Feedforward
+| Key | Description | Default |
+|-----|-------------|---------|
+| `servo.current_feedforward` | R*I feedforward | 1.0 |
+| `servo.bemf_feedforward` | Back-EMF feedforward | 0.0 |
+| `servo.inertia_feedforward` | Accel feedforward | 0.0 |
+
+#### Motor Temperature
+| Key | Description | Default | Example |
+|-----|-------------|---------|---------|
+| `servo.motor_fault_temperature` | Motor temp fault (°C) | NaN | `conf set servo.motor_fault_temperature 80.0` |
+| `servo.motor_temperature_margin` | Derate margin (°C) | 20.0 | `conf set servo.motor_temperature_margin 10.0` |
+
+#### Position Limits
+| Key | Description | Default | Example |
+|-----|-------------|---------|---------|
+| `servopos.position_min` | Min position (rev) | -0.01 | `conf set servopos.position_min -100.0` |
+| `servopos.position_max` | Max position (rev) | 0.01 | `conf set servopos.position_max 100.0` |
+
+#### Encoder / Motor Position
+| Key | Description | Example |
+|-----|-------------|---------|
+| `motor_position.sources.0.type` | Source type (1=SPI) | `conf get motor_position.sources.0.type` |
+| `motor_position.sources.0.cpr` | Counts per rev | `conf get motor_position.sources.0.cpr` |
+| `motor_position.sources.0.offset` | Phase offset (set by `calibrate`) | `conf get motor_position.sources.0.offset` |
+| `motor_position.sources.0.sign` | Direction (1 or -1) | `conf get motor_position.sources.0.sign` |
+| `motor_position.rotor_to_output_ratio` | Gear ratio | `conf get motor_position.rotor_to_output_ratio` |
+
+#### SPI Encoder
+| Key | Description | Example |
+|-----|-------------|---------|
+| `aux1.spi.mode` | SPI mode (0=AS5047) | `conf set aux1.spi.mode 0` |
 
 ### Diagnostics
 
