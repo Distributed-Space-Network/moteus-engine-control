@@ -115,82 +115,123 @@ encoder offset, and writes it to flash. The motor will move slightly.
 
 ### Common Configuration Keys
 
-#### Motor Parameters
+#### Motor Parameters (`motor.*`)
 | Key | Description | Default | GIM6010-8 |
 |-----|-------------|---------|-----------|
 | `motor.poles` | Total pole count (NOT pairs) | 1 | 28 |
 | `motor.Kv` | Speed constant (rpm/V) | 0 | 11.54 |
 | `motor.resistance_ohm` | Phase resistance (Ω) | 0 | 0.22 |
+| `motor.phase_invert` | Swap phase wiring | 0 | - |
+| `motor.offset` | Commutation offset table (64 values) | all 0 | set by calibration |
 
-#### Position PID (`servo.pid_position`)
-| Key | Description | Example |
-|-----|-------------|---------|
-| `servo.pid_position.kp` | Proportional gain | `conf set servo.pid_position.kp 50.0` |
-| `servo.pid_position.ki` | Integral gain | `conf set servo.pid_position.ki 0.0` |
-| `servo.pid_position.kd` | Derivative gain | `conf set servo.pid_position.kd 1.0` |
-
-#### Current PID (`servo.pid_dq`)
-| Key | Description | Example |
-|-----|-------------|---------|
-| `servo.pid_dq.kp` | Current loop proportional | `conf set servo.pid_dq.kp 1.0` |
-| `servo.pid_dq.ki` | Current loop integral | `conf set servo.pid_dq.ki 200.0` |
-
-#### Servo Limits
-| Key | Description | Default | Example |
-|-----|-------------|---------|---------|
-| `servo.max_current_A` | Max phase current | 20.0 (fam 2) | `conf set servo.max_current_A 5.0` |
-| `servo.max_voltage` | Max output voltage | 24.0 | `conf set servo.max_voltage 24.0` |
-| `servo.default_timeout_s` | Position cmd timeout | 0.1 | `conf set servo.default_timeout_s 20.0` |
-| `servo.fault_temperature` | FET temp fault (°C) | 78.0 | `conf set servo.fault_temperature 100.0` |
-| `servo.temperature_margin` | Derate before fault (°C) | 20.0 | `conf set servo.temperature_margin 20.0` |
-| `servo.voltage_mode_control` | Voltage-based pos mode | 0 | `conf set servo.voltage_mode_control 1` |
-
-#### Velocity & Acceleration Limits
-| Key | Description | Default | Example |
-|-----|-------------|---------|---------|
-| `servo.max_velocity` | Max velocity (rev/s) | 500.0 | `conf set servo.max_velocity 50.0` |
-| `servo.default_velocity_limit` | Pos mode vel limit | disabled | `conf set servo.default_velocity_limit 5.0` |
-| `servo.default_accel_limit` | Pos mode accel limit | disabled | `conf set servo.default_accel_limit 10.0` |
-
-#### Timeout Behavior
-| Key | Description | Default | Example |
-|-----|-------------|---------|---------|
-| `servo.default_timeout_s` | Seconds before timeout | 0.1 | `conf set servo.default_timeout_s 20.0` |
-| `servo.timeout_max_torque_Nm` | Torque limit in timeout | 5.0 | `conf set servo.timeout_max_torque_Nm 2.0` |
-| `servo.timeout_mode` | 0=stop, 10=hold, 12=zero_vel, 15=brake | 12 | `conf set servo.timeout_mode 0` |
-
-#### Feedforward
+#### Position PID (`servo.pid_position.*`)
 | Key | Description | Default |
 |-----|-------------|---------|
-| `servo.current_feedforward` | R*I feedforward | 1.0 |
-| `servo.bemf_feedforward` | Back-EMF feedforward | 0.0 |
-| `servo.inertia_feedforward` | Accel feedforward | 0.0 |
+| `servo.pid_position.kp` | Proportional gain | 0 |
+| `servo.pid_position.ki` | Integral gain | 0 |
+| `servo.pid_position.kd` | Derivative gain | 0 |
+| `servo.pid_position.ilimit` | Integral windup limit | 0 |
 
-#### Motor Temperature
-| Key | Description | Default | Example |
-|-----|-------------|---------|---------|
-| `servo.motor_fault_temperature` | Motor temp fault (°C) | disabled | `conf set servo.motor_fault_temperature 80.0` |
-| `servo.motor_temperature_margin` | Derate margin (°C) | 20.0 | `conf set servo.motor_temperature_margin 10.0` |
-
-#### Position Limits
-| Key | Description | Default | Example |
-|-----|-------------|---------|---------|
-| `servopos.position_min` | Min position (rev) | -0.01 | `conf set servopos.position_min -100.0` |
-| `servopos.position_max` | Max position (rev) | 0.01 | `conf set servopos.position_max 100.0` |
-
-#### Encoder / Motor Position
-| Key | Description | Example |
+#### Current PID (`servo.pid_dq.*`)
+| Key | Description | Default |
 |-----|-------------|---------|
-| `motor_position.sources.0.type` | Source type (1=SPI) | `conf get motor_position.sources.0.type` |
-| `motor_position.sources.0.cpr` | Counts per rev | `conf get motor_position.sources.0.cpr` |
-| `motor_position.sources.0.offset` | Phase offset (set by `calibrate`) | `conf get motor_position.sources.0.offset` |
-| `motor_position.sources.0.sign` | Direction (1 or -1) | `conf get motor_position.sources.0.sign` |
-| `motor_position.rotor_to_output_ratio` | Gear ratio | `conf get motor_position.rotor_to_output_ratio` |
+| `servo.pid_dq.kp` | Current loop proportional | 0 |
+| `servo.pid_dq.ki` | Current loop integral | 0 |
 
-#### SPI Encoder
-| Key | Description | Example |
+#### PWM & Hardware (`servo.*`)
+| Key | Description | Default |
 |-----|-------------|---------|
-| `aux1.spi.mode` | SPI mode (0=AS5047) | `conf set aux1.spi.mode 0` |
+| `servo.pwm_rate_hz` | PWM/control loop frequency (Hz) | 40000 |
+| `servo.current_sense_ohm` | Sense resistor value (Ω) | hw-dependent |
+
+#### Servo Limits (`servo.*`)
+| Key | Description | Default |
+|-----|-------------|---------|
+| `servo.max_current_A` | Max phase current (A) | 20.0 (fam 2) |
+| `servo.derate_current_A` | Current derate offset (A) | -3.0 (fam 2) |
+| `servo.max_voltage` | Max output voltage (V) | hw-dependent |
+| `servo.max_power_W` | Max power output (W) | disabled |
+| `servo.max_velocity` | Max motor velocity (rev/s) | 500.0 |
+| `servo.max_velocity_derate` | Velocity derate range (rev/s) | 2.0 |
+
+#### Voltage & Current Modes (`servo.*`)
+| Key | Description | Default |
+|-----|-------------|---------|
+| `servo.voltage_mode_control` | Use voltage instead of current PID | 0 (off) |
+| `servo.fixed_voltage_mode` | Open-loop voltage mode (no encoder) | 0 (off) |
+| `servo.fixed_voltage_control_V` | Voltage for fixed mode | 0.0 |
+
+#### Velocity & Acceleration Limits (`servo.*`)
+| Key | Description | Default |
+|-----|-------------|---------|
+| `servo.default_velocity_limit` | Position mode max speed (rev/s) | disabled |
+| `servo.default_accel_limit` | Position mode max accel (rev/s²) | disabled |
+
+#### Timeout Behavior (`servo.*`)
+| Key | Description | Default |
+|-----|-------------|---------|
+| `servo.default_timeout_s` | Seconds before timeout | 0.1 |
+| `servo.timeout_max_torque_Nm` | Torque limit during timeout | 5.0 |
+| `servo.timeout_mode` | Timeout action: 0=stop, 10=hold, 12=zero_vel, 15=brake | 12 |
+
+#### Feedforward (`servo.*`)
+| Key | Description | Default |
+|-----|-------------|---------|
+| `servo.current_feedforward` | R×I voltage feedforward | 1.0 |
+| `servo.bemf_feedforward` | Back-EMF velocity feedforward | 0.0 |
+| `servo.inertia_feedforward` | Acceleration torque feedforward | 0.0 |
+
+#### Slip Detection (`servo.*`)
+| Key | Description | Default |
+|-----|-------------|---------|
+| `servo.max_position_slip` | Max position error before fault (rev) | disabled |
+| `servo.max_velocity_slip` | Max velocity error before fault (rev/s) | disabled |
+
+#### Temperature (`servo.*`)
+| Key | Description | Default |
+|-----|-------------|---------|
+| `servo.fault_temperature` | FET temp fault threshold (°C) | 78.0 |
+| `servo.temperature_margin` | Derate starts at fault−margin (°C) | 20.0 |
+| `servo.enable_motor_temperature` | Enable motor thermistor | 0 (off) |
+| `servo.motor_fault_temperature` | Motor temp fault (°C) | disabled |
+| `servo.motor_temperature_margin` | Motor derate margin (°C) | 20.0 |
+
+#### Flux Braking (`servo.*`)
+| Key | Description | Default |
+|-----|-------------|---------|
+| `servo.flux_brake_margin_voltage` | Volts below max_voltage to start braking | 3.0 |
+| `servo.flux_brake_resistance_ohm` | Brake resistor value (Ω) | 0.025 |
+
+#### Position Limits (`servopos.*`)
+| Key | Description | Default |
+|-----|-------------|---------|
+| `servopos.position_min` | Min position (rev) | -0.01 |
+| `servopos.position_max` | Max position (rev) | 0.01 |
+
+#### Encoder / Motor Position (`motor_position.*`)
+| Key | Description |
+|-----|-------------|
+| `motor_position.sources.0.type` | Source type (0=none, 1=SPI, 2=UART, 3=quad, 4=hall) |
+| `motor_position.sources.0.aux_number` | AUX port (1 or 2) |
+| `motor_position.sources.0.cpr` | Counts per revolution |
+| `motor_position.sources.0.offset` | Phase offset (set by `calibrate`) |
+| `motor_position.sources.0.sign` | Direction (1 or -1) |
+| `motor_position.sources.0.pll_filter_hz` | PLL filter bandwidth (Hz) |
+| `motor_position.commutation_source` | Which source for commutation (0-based) |
+| `motor_position.output.source` | Which source for position output (0-based) |
+| `motor_position.output.offset` | Output position offset |
+| `motor_position.output.sign` | Output direction (1 or -1) |
+| `motor_position.rotor_to_output_ratio` | Gear ratio (e.g. 0.125 for 8:1) |
+
+#### SPI Encoder (`aux1.*`)
+| Key | Description |
+|-----|-------------|
+| `aux1.spi.mode` | 0=AS5047, 1=disabled, 6=MA600, 7=board_default |
+
+#### Device Identity (`id.*`)
+| Key | Description | Default |
+|-----|-------------|---------|
+| `id.id` | Motor bus ID | 1 |
 
 ### Diagnostics
 
