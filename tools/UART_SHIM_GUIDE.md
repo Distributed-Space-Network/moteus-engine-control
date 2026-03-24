@@ -149,8 +149,8 @@ encoder offset, and writes it to flash. The motor will move slightly.
 | Key | Description | Default | Example |
 |-----|-------------|---------|---------|
 | `servo.max_velocity` | Max velocity (rev/s) | 500.0 | `conf set servo.max_velocity 50.0` |
-| `servo.default_velocity_limit` | Pos mode vel limit | NaN | `conf set servo.default_velocity_limit 5.0` |
-| `servo.default_accel_limit` | Pos mode accel limit | NaN | `conf set servo.default_accel_limit 10.0` |
+| `servo.default_velocity_limit` | Pos mode vel limit | disabled | `conf set servo.default_velocity_limit 5.0` |
+| `servo.default_accel_limit` | Pos mode accel limit | disabled | `conf set servo.default_accel_limit 10.0` |
 
 #### Timeout Behavior
 | Key | Description | Default | Example |
@@ -169,7 +169,7 @@ encoder offset, and writes it to flash. The motor will move slightly.
 #### Motor Temperature
 | Key | Description | Default | Example |
 |-----|-------------|---------|---------|
-| `servo.motor_fault_temperature` | Motor temp fault (°C) | NaN | `conf set servo.motor_fault_temperature 80.0` |
+| `servo.motor_fault_temperature` | Motor temp fault (°C) | disabled | `conf set servo.motor_fault_temperature 80.0` |
 | `servo.motor_temperature_margin` | Derate margin (°C) | 20.0 | `conf set servo.motor_temperature_margin 10.0` |
 
 #### Position Limits
