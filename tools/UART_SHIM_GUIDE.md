@@ -256,12 +256,13 @@ The firmware automatically:
 2. **Cruises** at `default_velocity_limit` (2.0 rev/s)
 3. **Decelerates** at `default_accel_limit` to stop precisely at target
 
-### Disable limits (free-running)
+### Disable limits (no ramp, full speed)
 ```
-conf set servo.default_velocity_limit nan
-conf set servo.default_accel_limit nan
+conf set servo.default_velocity_limit 10000.0
+conf set servo.default_accel_limit 10000.0
 conf write
 ```
+Setting very large values effectively disables the limits. The velocity and acceleration limits are **disabled by default**.
 
 ## Unit Conversions
 
