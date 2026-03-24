@@ -234,6 +234,35 @@ move 8 1.5
 move 0.44 3.0
 ```
 
+## Trapezoidal Motion Profiles
+
+The firmware can generate trapezoidal velocity profiles (slow start → cruise → slow stop)
+when using position mode with velocity and acceleration limits.
+
+### Setup
+```
+conf set servo.default_velocity_limit 2.0   # Max speed (rev/s)
+conf set servo.default_accel_limit 5.0      # Ramp rate (rev/s²)
+conf write
+```
+
+### Usage
+```
+pos 0 2.0       # Move to position 0 at up to 2 rev/s
+```
+
+The firmware automatically:
+1. **Accelerates** at `default_accel_limit` (5.0 rev/s²)
+2. **Cruises** at `default_velocity_limit` (2.0 rev/s)
+3. **Decelerates** at `default_accel_limit` to stop precisely at target
+
+### Disable limits (free-running)
+```
+conf set servo.default_velocity_limit nan
+conf set servo.default_accel_limit nan
+conf write
+```
+
 ## Unit Conversions
 
 | Unit | Value |
